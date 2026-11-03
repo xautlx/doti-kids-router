@@ -11,12 +11,14 @@ import { cleanDomain, defaults as settingsDefaults, LAN_FREE_DEFAULT } from 'dot
 import { TEMP_SSID, apply as wifiApply, bins as wifiBins, cmdsDisabled, cmdsKey, ifacesOf, kidNet, load as wifiLoad, parentHasPassword, parentIfaces, randDigits, shq, state as wifiState } from 'doti.wifi';
 import { follow as rootFollow, hash as rootHash, release as rootRelease } from 'doti.rootpw';
 import { add as usageAdd, expired as usageExpired, onlineMin, trendPush } from 'doti.usage';
+import { append as evAppend, step as evStep } from 'doti.events';
+import { monthOf, plan as summaryPlan, summarize } from 'doti.summary';
 import { ensureDirs, etc, gen, readJson, setApplied, takeMark, tmp, withLock, writeJson, writeSecret, writeText } from 'doti.store';
 import { hmacSha256, sha256 } from 'doti.hmac';
 import { emptyList, join as listJoin, remove as listRemove, sign, verify } from 'doti.auth';
 import { backoff, post as cloudPost } from 'doti.cloud';
 
-const VERSION = '1.0.28';
+const VERSION = '1.0.30';
 const CLOCK_FIX = 120;
 const TREND_N = 60, TICK = 10, DT_MAX = 120, REAPPLY = 600, BASE_SAVE = 3600, WANT_ON = 3, WANT_OFF = 6, SEG_JITTER = 90, CONFIRM_TICKS = 3, LIMIT_KBPS = 100;   // LIMIT_KBPS：设置里没带限速时网速时的默认
 const cfg = {
@@ -127,6 +129,8 @@ let busy = {}, busyHit = {}, busyMiss = {}, want = {}, seg = {};
 let usage = null, usageDay = '', usageHour = -1, stateHour = -1, lastStatus = null, trend = {};
 let rrmAt = 0, wifiKey = null, baseKey = null;
 let blkConf = null, blkKey = null, blkStat = null, wifiOn = null;
+// 状态变化记录：每个网络上一步的样子（换一天清空），刚开机的第一步记「路由器重启」
+let evMem = {}, evDay = '', evBoot = +(split(fs.readfile('/proc/uptime') ?? '0', ' ')[0]) < 300 ? 'reboot' : 'restart';
 
 // 设置里没带这个开关的按默认（关）
 function lanFreeOf(ns) { return !!(ns?.lanFree ?? LAN_FREE_DEFAULT); }
@@ -159,11 +163,39 @@ function segFor(o, t, inUse) {
 }
 
 function usageSave() { if (usage && usageDay) writeJson(etc('usage/' + usageDay + '.json'), usage); }
+// 每日摘要：今天以前、明细还在、摘要里还没有的日子补上（换天时、开机后跑一次；路由器半夜关着也能补）
+// 闪存剩余 KB（df 读不到就 null）
+function availKB(dir) {
+	const p = fs.popen(sprintf('df -k %s 2>/dev/null', dir), 'r');
+	const out = p ? p.read('all') : '';
+	if (p) p.close();
+	const m = match(out ?? '', /\n[^\n]*[ \t]+[0-9]+[ \t]+[0-9]+[ \t]+([0-9]+)[ \t]+[0-9]+%/);
+	return m ? +m[1] : null;
+}
+function summaryCatchUp(day) {
+	fs.mkdir(etc('summary'));
+	// 留多久看闪存剩多少：先删该删的旧月份，空间很紧时当天的也先不写
+	const pl = summaryPlan(fs.lsdir(etc('summary')) ?? [], day, now(), availKB(etc('summary')));
+	for (let f in pl.del) { fs.unlink(etc('summary/' + f)); log('每日摘要：删掉旧的 ' + f + '（闪存空间）'); }
+	if (!pl.write) { log('闪存剩余不多，每日摘要先不写'); return; }
+	const months = {};
+	for (let f in (fs.lsdir(etc('usage')) ?? [])) {
+		const date = substr(f, 0, 10);
+		if (!match(f, /^[0-9]{4}-[0-9]{2}-[0-9]{2}\.json$/) || date >= day) continue;
+		const mo = monthOf(date);
+		months[mo] ??= readJson(etc('summary/' + mo + '.json'), null) ?? {};
+		if (months[mo][date]) continue;
+		months[mo][date] = summarize(readJson(etc('usage/' + f), {}));
+		months[mo]._dirty = true;
+	}
+	for (let mo, m in months) if (m._dirty) { delete m._dirty; writeJson(etc('summary/' + mo + '.json'), m); }
+}
 function usageRoll(day, hour) {
 	if (day != usageDay) {
 		usageSave();
 		usageDay = day;
 		usage = readJson(etc('usage/' + day + '.json'), {});
+		summaryCatchUp(day);   // 先摘要，再删 7 天前的明细
 		for (let f in usageExpired(fs.lsdir(etc('usage')) ?? [], day)) fs.unlink(etc('usage/' + f));
 	}
 	else if (hour != usageHour && usageHour >= 0) usageSave();
@@ -289,6 +321,9 @@ function tick(id, c) {
 		wifiKey = wk;
 	}
 	const outs = [], speed = {};
+	if (day != evDay) { evMem = {}; evDay = day; }
+	// 谁刚改了规则、开关了 WiFi（局域网接口写的，两分钟内有效）
+	const whoNow = readJson(tmp('who.json'), null) ?? {};
 	for (let n in c.nets) {
 		const ns = netSettings(c, n.key);
 		if (!ns) continue;
@@ -309,7 +344,12 @@ function tick(id, c) {
 			usageAdd(usage, k, lt.hour, o.limited, inUse ? dt : 0, ddn / 1024.0, dup / 1024.0, devUse?.[k]);
 		}
 		const sg = segFor(o, t, !!busy[k]);
-		const plan = c.today.plans[k];
+		// 临时开放到点后 today.json 里还留着这条安排（当天有效），状态里只报还在生效的
+		const p0 = c.today.plans[k], plan = p0 && (p0.action != 'open' || p0.until > t) ? p0 : null;
+		const er = evStep(evMem[k], { period: on && !on[k] ? 'wifiOff' : o.period, periodName: o.periodName, remainSec: o.remainSec, next: sg.next,
+			plan: p0, planOn: !!plan, inUse, wifiOn: on ? !!on[k] : null, ver: ns.ver, rules: ns, who: whoNow[k], cancel: c.today.cancel?.[k], boot: evBoot }, t);
+		evMem[k] = er[0];
+		if (usage) evAppend(usage, k, er[1]);
 		push(outs, { key: k, dev: n.dev, limited: o.limited, kbps: ns.limitKbps ?? LIMIT_KBPS, lanFree: lanFreeOf(ns), net: {
 			key: k, name: ns.name, wifiOn: on ? !!on[k] : null,
 			period: on && !on[k] ? 'wifiOff' : o.period, periodName: o.periodName,
@@ -320,6 +360,7 @@ function tick(id, c) {
 			...(plan ? { plan } : {}), ...(speed[k] ? { speed: speed[k] } : {}) } });
 	}
 	for (let o in outs) limitedNow[o.key] = o.limited;
+	evBoot = null;
 	blockTick(c);
 	if (det?.dirty && m - lastBaseSave >= BASE_SAVE) saveBaseline();
 

@@ -9,6 +9,7 @@ import { make as opsMake } from 'doti.ops';
 import { etc, mark, readJson, tmp, waitApplied, bumpGen, withLock, writeJson, writeSecret, writeText } from 'doti.store';
 import { follow as rootFollow } from 'doti.rootpw';
 import { toApi as usageApi } from 'doti.usage';
+import { KEEP_DAYS as SUM_DAYS, monthOf, summarize } from 'doti.summary';
 import { adminSsid, apply as wifiApply, bins as wifiBins, cmdsDisabled, cmdsKey, cmdsParent, ifacesOf, kidNet, load as wifiLoad, parentIfaces, parentTargets, randDigits, shq, state as wifiState, validPassword } from 'doti.wifi';
 
 const OPS = opsMake({ settings: { defaults, merge: settingsMerge }, store: { etc, readJson, withLock, writeJson },
@@ -17,7 +18,7 @@ const netKeys = OPS.netKeys, saveSettings = OPS.saveSettings, settingsOf = OPS.s
 const MAX_BODY = 16384, RESTORE_MAX = 163840, AVATAR_MAX = 8192, CLOCK_FIX = 120, STALE = 30;
 const PUB = { hello: 'GET', look: 'GET' };
 const ADMIN = { claim: 'POST', backup: 'GET', join: 'POST', status: 'GET', settings: '*', today: 'POST',
-	wifi: '*', usage: 'GET', speed: 'GET', device: 'POST', parents: '*', unbind: 'POST', time: 'POST' };
+	wifi: '*', usage: 'GET', summary: 'GET', speed: 'GET', device: 'POST', parents: '*', unbind: 'POST', time: 'POST' };
 const SLOW = { claim: true, join: true };
 const MSG = {
 	BAD_REQUEST: '参数不对', UNAUTHORIZED: '身份已过期，请重试', NOT_PARENT: '你还不是这台路由器的家长，请让家长邀请你',
@@ -268,11 +269,21 @@ H.look = (c) => {
 		rules: { surfMin: ns.surfMin, limitMin: ns.limitMin, dailyMaxMin: ns.dailyMaxMin, windows: map(ns.windows ?? [], w => ({ kind: w.kind, name: w.name, days: w.days, start: w.start, end: w.end })) } });
 };
 
+// 记下谁刚改了规则 / 开关了 WiFi，常驻程序写状态变化时带上（kind：r 规则、w WiFi）
+function noteWho(c, keys, kind) {
+	const by = listIndex(parentsList(), c.who) + 1;
+	if (by < 1) return;
+	const w = readJson(tmp('who.json'), null) ?? {};
+	for (let k in keys) { w[k] ??= {}; w[k][kind] = { by, at: c.now }; }
+	writeJson(tmp('who.json'), w);
+}
+
 H.settings = (c) => {
 	if (c.method == 'GET') return ok({ settings: settingsNow(c.id) });
 	const m = saveSettings(c.id.code, c.body, c.now);
 	if (m.err == 'INTERNAL') return fail('INTERNAL');
 	if (m.err) return fail('BAD_REQUEST', { field: m.err });
+	noteWho(c, map(c.body?.networks ?? [], n => n?.key), 'r');
 	const applied = waitApplied(bumpGen(), c.now);
 	if (length(m.conflicts)) return fail('CONFLICT', { settings: m.settings, conflicts: m.conflicts });
 	return ok({ settings: m.settings, conflicts: [], applied });
@@ -286,6 +297,24 @@ H.today = (c) => {
 	let net = null;
 	for (let n in (statusNow(c).networks ?? [])) if (n.key == b.key) net = n;
 	return ok({ network: net, applied });
+};
+
+// 每日摘要（长期趋势）：最近 days 天（最多 SUM_DAYS），从早到晚；今天的按实时明细现算
+H.summary = (c) => {
+	let n = +(query('days') ?? 28);
+	if (n < 1 || n > SUM_DAYS) n = 28;
+	const out = [], cache = {};
+	for (let i = n - 1; i >= 0; i--) {
+		const lt = localtime(c.now - i * 86400), date = sprintf('%04d-%02d-%02d', lt.year, lt.mon, lt.mday), mo = monthOf(date);
+		let nets = null;
+		if (i == 0) nets = summarize(readJson(tmp('usage-now.json'), null) ?? readJson(etc('usage/' + date + '.json'), {}));
+		else {
+			cache[mo] ??= readJson(etc('summary/' + mo + '.json'), null) ?? {};
+			nets = cache[mo][date] ?? null;
+		}
+		if (nets && length(keys(nets))) push(out, { date, networks: nets });
+	}
+	return ok({ days: out });
 };
 
 // 设备档案：主机名、类型（常驻程序记的）和家长起的名字；名字按 MAC 找，找不到再按主机名找（换了随机 MAC 的同一台）
@@ -309,7 +338,7 @@ H.usage = (c) => {
 		const day = i == 0 ? (readJson(tmp('usage-now.json'), null) ?? readJson(etc('usage/' + date + '.json'), {})) : readJson(etc('usage/' + date + '.json'), {});
 		const nets = usageApi(day);
 		for (let x in nets) for (let h in x.hours) for (let d in (h.devs ?? [])) devices[d.mac] ??= info(d.mac);
-		push(out, { date, networks: nets });
+		push(out, { date, networks: nets, ...(day._ev ? { events: day._ev } : {}) });
 	}
 	return ok({ days: out, devices });
 };
@@ -400,6 +429,7 @@ H.wifi = (c) => {
 	if (q.op == 'toggle') {
 		const e = wifiToggle(q.key, q.on);
 		if (e) return fail(e);
+		noteWho(c, [q.key], 'w');
 		return ok({ key: q.key, want: q.on });
 	}
 	if (q.op == 'setup') {

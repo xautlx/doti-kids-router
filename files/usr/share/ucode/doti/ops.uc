@@ -17,7 +17,7 @@ export function make(d) {
 		const lt = localtime(now), date = sprintf('%04d-%02d-%02d', lt.year, lt.mon, lt.mday);
 		const r = withLock(() => {
 			const t = readJson(etc('today.json'), null) ?? { seq: 0, plans: {} };
-			if (act == 'auto') delete t.plans[b.key];
+			if (act == 'auto') { delete t.plans[b.key]; t.cancel ??= {}; t.cancel[b.key] = { by: byIdx, at: now }; }
 			else {
 				t.seq++;
 				t.plans[b.key] = { seq: t.seq, date, action: act, at: now, by: byIdx,

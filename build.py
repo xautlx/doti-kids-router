@@ -18,7 +18,7 @@ PKG, FULL = 'doti', f'{VERSION}-1'
 EXEC = ('usr/sbin/', 'usr/libexec/doti/', 'etc/init.d/', 'etc/uci-defaults/')
 CGI = '/usr/libexec/doti/cgi'
 PUB = ['hello', 'look']
-ADMIN = ['claim', 'backup', 'join', 'status', 'settings', 'today', 'wifi', 'usage', 'speed', 'device', 'parents', 'unbind', 'time']
+ADMIN = ['claim', 'backup', 'join', 'status', 'settings', 'today', 'wifi', 'usage', 'summary', 'speed', 'device', 'parents', 'unbind', 'time']
 
 CONTROL = f"""Package: {PKG}
 Version: {FULL}

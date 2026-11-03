@@ -29,6 +29,7 @@ export function add(day, key, hour, limited, inUseSec, downKB, upKB, devs) {
 export function toApi(day) {
 	const out = [];
 	for (let key in sort(keys(day ?? {}))) {
+		if (substr(key, 0, 1) == '_') continue;   // _ev 是状态变化记录
 		const hours = [];
 		for (let h in sort(map(keys(day[key]), x => +x), (x, y) => x - y)) {
 			const v = day[key]['' + h];
