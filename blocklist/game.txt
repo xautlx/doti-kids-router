@@ -1,0 +1,19 @@
+# 一点守护 · 可选分类：游戏（家长打开才屏蔽，默认关）。一行一个域名（同时屏蔽所有子域名）。
+# 收录国内常见的网页游戏站、游戏平台和热门手游官网。
+# 很多手游 App 不走路由器 DNS，对已装好的 App 效果有限。
+4399.com
+7k7k.com
+3366.com
+2144.cn
+37.com
+17173.com
+taptap.cn
+taptap.com
+mihoyo.com
+hoyoverse.com
+yuanshen.com
+pvp.qq.com
+lol.qq.com
+roblox.com
+steampowered.com
+steamcommunity.com

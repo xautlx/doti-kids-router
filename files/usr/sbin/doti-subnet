@@ -1,0 +1,72 @@
+#!/bin/sh
+# 一点守护网段避让
+FAMILIES="10 66 77 88 99 123 151 199"
+MARK=/etc/doti/preinstall
+ETC=/etc/doti
+log() { logger -t doti "$*"; echo "[doti] $*"; }
+
+# 已占用的网段
+occupied() {
+	if [ -n "${DOTI_OCCUPIED+x}" ]; then printf '%s\n' $DOTI_OCCUPIED; return; fi
+	ip -4 addr show 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1 | grep -vE '^127\.'
+}
+# F 的 10.F.0–3 是否和已占用地址冲突
+collide() {
+	local f=$1 a filt=cat
+	[ "${2:-}" = self ] && filt="grep -vE ^10\.$f\.[0-3]\.1$"
+	for a in $(occupied | $filt); do
+		case "$a" in 10.$f.0.*|10.$f.1.*|10.$f.2.*|10.$f.3.*) return 0 ;; esac
+	done
+	return 1
+}
+pick() {
+	local f
+	for f in $FAMILIES; do collide "$f" || { echo "$f"; return 0; }; done
+	echo 10
+}
+# 当前在用的 F
+curfam() {
+	local ip=$(uci -q get network.doti1.ipaddr)
+	case "$ip" in 10.*.1.1) echo "$ip" | cut -d. -f2 ;; *) echo "" ;; esac
+}
+preinstall() { [ -f "$MARK" ]; }
+
+apply() {
+	local f=$1 cur=$(curfam)
+	[ -n "$f" ] || return 1
+	[ "$cur" = "$f" ] && return 0
+	if preinstall; then
+		uci set network.lan.ipaddr=10.$f.0.1
+		uci set network.lan.netmask=255.255.255.0
+	fi
+	uci set network.doti1.ipaddr=10.$f.1.1
+	uci set network.doti2.ipaddr=10.$f.2.1
+	uci -q get network.doti3 >/dev/null && uci set network.doti3.ipaddr=10.$f.3.1
+	uci commit network
+	[ -f "$ETC/nets.json" ] && sed -i "s/10\.$cur\.1\.1/10.$f.1.1/g; s/10\.$cur\.2\.1/10.$f.2.1/g; s/10\.$cur\.3\.1/10.$f.3.1/g" "$ETC/nets.json"
+	log "网段换到 10.$f（孩子网络 10.$f.1–3.1$(preinstall && echo "、LAN 10.$f.0.1")）"
+	return 0
+}
+
+# DOTI_SUBNET_LIB=1 时只加载函数（测试用）
+[ "${DOTI_SUBNET_LIB:-}" = 1 ] && return 0 2>/dev/null
+
+case "$1" in
+	pick) pick ;;
+	apply) apply "$2" ;;
+	check)
+		cur=$(curfam)
+		[ -n "$cur" ] || exit 0
+		if collide "$cur" self; then
+			new=$(pick)
+			if [ "$new" != "$cur" ] && apply "$new"; then
+				/etc/init.d/network reload
+				/etc/init.d/uhttpd restart
+				/etc/init.d/doti restart 2>/dev/null
+			else
+				log "网段 10.$cur 和 WAN 冲突，但没找到可换的段"
+			fi
+		fi
+		;;
+	*) echo "用法: doti-subnet pick|apply <F>|check" >&2; exit 1 ;;
+esac

@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # 测试在发布前已经跑过（测试不随仓库公开），这里只打包、发布；云端地址在仓库的 cloud.url 里
+      # ipk 和 apk（OpenWrt 25.x）一起打；apk 包要 apk-tools 3 的 apk mkpkg，在 Alpine 容器里打
+      - name: Package
+        run: |
+          docker run --rm -v "$PWD":/w -w /w alpine:3.24 sh -c "apk add -q python3 && python3 build.py --apk && chown -R $(id -u):$(id -g) dist"
+          ls -l dist
+
+      # 打标签时：标签必须和程序里的版本一致，再发布到 Releases
+      - name: Check tag matches version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          v=$(sed -nE "s/^const VERSION = '([^']+)';.*/\1/p" files/usr/sbin/doti)
+          [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "标签 ${GITHUB_REF_NAME} 和程序版本 $v 不一致"; exit 1; }
+
+      # Release 附件：ipk 和 apk 包、升级程序副本（在线升级时路由器按 tag 下载）、固定名 doti_all.ipk（首次安装的「最新版」地址）、
+      # SHA256SUMS（和在线升级签名里的 sha256 一致；安装脚本 install.sh 也按它校验）
+      - name: Release files
+        run: |
+          uv=$(sed -nE "s/^const VERSION = '([^']+)';.*/\1/p" updater/files/usr/share/doti-updater/doti-update.uc)
+          v=$(sed -nE "s/^const VERSION = '([^']+)';.*/\1/p" files/usr/sbin/doti)
+          cp updater/files/usr/share/doti-updater/doti-update.uc "dist/doti-update_$uv.uc"
+          cp dist/doti_*-1_all.ipk dist/doti_all.ipk
+          cp "dist/doti-$v-r1.apk" dist/doti_all.apk
+          (cd dist && sha256sum doti_*.ipk doti-updater_*.ipk doti_all.apk doti-*.apk doti-update_*.uc > SHA256SUMS && cat SHA256SUMS)
+          sed -e "s/{VER}/$v/g" -e "s/{UVER}/$uv/g" .github/release-notes.md > release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: dist/*
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          body_path: release-notes.md
+          generate_release_notes: true

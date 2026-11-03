@@ -1,0 +1,683 @@
+#!/usr/bin/ucode -S
+// 一点守护主程序
+'use strict';
+import * as fs from 'fs';
+import { classify, nextOf, segOf, step as ctlStep, toEngine, today } from 'doti.engine';
+import { apply as nftApply, baseRuleset, dnsRuleset, isPrivate, limitRuleset, listJSON, parseCounters, parseDrops, removeAll } from 'doti.nft';
+import { features, parseConntrack, parseLeases, parseSets, parseStations, prefixes } from 'doti.calib';
+import { create as detCreate, save as detSave, step as detStep } from 'doti.detect';
+import { DOH_IPS, counts as blockCounts, mainConf as blockMain, pickDir as blockDir } from 'doti.block';
+import { cleanDomain, defaults as settingsDefaults, LAN_FREE_DEFAULT } from 'doti.settings';
+import { TEMP_SSID, apply as wifiApply, bins as wifiBins, cmdsDisabled, cmdsKey, ifacesOf, kidNet, load as wifiLoad, parentHasPassword, parentIfaces, randDigits, shq, state as wifiState } from 'doti.wifi';
+import { follow as rootFollow, hash as rootHash, release as rootRelease } from 'doti.rootpw';
+import { add as usageAdd, expired as usageExpired, onlineMin, trendPush } from 'doti.usage';
+import { ensureDirs, etc, gen, readJson, setApplied, takeMark, tmp, withLock, writeJson, writeSecret, writeText } from 'doti.store';
+import { hmacSha256, sha256 } from 'doti.hmac';
+import { emptyList, join as listJoin, remove as listRemove, sign, verify } from 'doti.auth';
+import { backoff, post as cloudPost } from 'doti.cloud';
+
+const VERSION = '1.0.28';
+const CLOCK_FIX = 120;
+const TREND_N = 60, TICK = 10, DT_MAX = 120, REAPPLY = 600, BASE_SAVE = 3600, WANT_ON = 3, WANT_OFF = 6, SEG_JITTER = 90, CONFIRM_TICKS = 3, LIMIT_KBPS = 100;   // LIMIT_KBPS：设置里没带限速时网速时的默认
+const cfg = {
+	nft: getenv('DOTI_NFT') || 'nft',
+	conntrack: getenv('DOTI_CONNTRACK') || '/proc/net/nf_conntrack',
+	leases: getenv('DOTI_LEASES') || '/tmp/dhcp.leases',
+	iw: getenv('DOTI_IW') || 'iw',
+	uci: getenv('DOTI_UCI') || 'uci',
+	ubus: getenv('DOTI_UBUS') || 'ubus',
+	blocklist: getenv('DOTI_BLOCKLIST') || '/usr/share/doti/blocklist',
+	dnsPid: getenv('DOTI_DNS_PID') || '/var/run/doti-dns.pid',
+	dnsPort: 5390,
+	board: getenv('DOTI_BOARD') || '/etc/board.json',
+	sysnet: getenv('DOTI_SYSNET') || '/sys/class/net',
+	updater: getenv('DOTI_UPDATER') || '/usr/sbin/doti-update',
+};
+
+function log(msg) {
+	const f = getenv('DOTI_LOGFILE');
+	if (f) { const h = fs.open(f, 'a'); h.write(msg + '\n'); h.close(); return; }
+	system(['logger', '-t', 'doti', msg]);
+}
+function exists(f) { return fs.stat(f) != null; }
+function sh(cmd) { const p = fs.popen(cmd, 'r'); if (!p) return ''; const s = p.read('all'); p.close(); return trim(s ?? ''); }
+let vclock = getenv('DOTI_LOOPS') ? +(getenv('DOTI_VSTART') ?? 1000) : null, loops = +(getenv('DOTI_LOOPS') ?? 0);
+function mono() { if (vclock != null) return vclock; const u = fs.readfile('/proc/uptime'); return u ? +split(u, ' ')[0] : time(); }
+function now() { return getenv('DOTI_NOW') ? +getenv('DOTI_NOW') + (vclock != null ? vclock - 1000 : 0) : time(); }
+
+// ---------- 身份 ----------
+function hexRand(n) {
+	const f = fs.open('/dev/urandom', 'r');
+	const b = f.read(n);
+	f.close();
+	let s = '';
+	for (let i = 0; i < length(b); i++) s += sprintf('%02x', ord(b, i));
+	return s;
+}
+function newIdentity() {
+	const id = { id: hexRand(16), key: hexRand(32), code: uc(hexRand(2)), registered: false };
+	writeSecret(etc('identity.json'), id);
+	log('生成设备身份，编号 ' + id.code);
+	return id;
+}
+// 出厂 MAC
+function factoryMac() {
+	let m = '';
+	try { m = json(fs.readfile(cfg.board) ?? '{}')?.system?.label_macaddr ?? ''; } catch (e) { m = ''; }
+	if (!m) m = trim(fs.readfile(cfg.sysnet + '/eth0/address') ?? '');
+	m = lc(m);
+	if (!match(m, /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/) || m == '00:00:00:00:00:00') return null;
+	if (index('2367abef', substr(m, 1, 1)) >= 0) return null;
+	return m;
+}
+function identity() {
+	const id = readJson(etc('identity.json'), null);
+	return (id?.id && id?.key && id?.code) ? id : newIdentity();
+}
+
+// ---------- 配置 ----------
+function nets() { return readJson(etc('nets.json'), []); }
+function loadConf(id) {
+	const ns = nets(), keys = map(ns, n => n.key);
+	let s = readJson(etc('settings.json'), null);
+	if (!s) { s = settingsDefaults(keys, id.code); writeJson(etc('settings.json'), s); }
+	return { nets: ns, settings: s, today: readJson(etc('today.json'), null) ?? { seq: 0, plans: {} },
+		parents: readJson(etc('parents.json'), null) };
+}
+function netSettings(c, key) { for (let n in c.settings.networks) if (n.key == key) return n; return null; }
+
+// 局域网地址
+function maskLen(m) {
+	const p = match(m ?? '', /^([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)$/);
+	if (!p) return 24;
+	let c = 0;
+	for (let i = 1; i <= 4; i++) { let v = +p[i]; for (let b = 7; b >= 0; b--) { if (v & (1 << b)) c++; else return c; } }
+	return c;
+}
+// ipaddr 可能是 CIDR 写法或列表
+function lanAddr(ipaddr, mask) {
+	const p = split(split(trim(ipaddr ?? ''), ' ')[0], '/');
+	return { ip: p[0], prefix: p[1] != null && match(p[1], /^[0-9]+$/) ? +p[1] : maskLen(mask) };
+}
+function writeAddr(c) {
+	const a = { lan: lanAddr(sh(cfg.uci + ' -q get network.lan.ipaddr 2>/dev/null'), sh(cfg.uci + ' -q get network.lan.netmask 2>/dev/null')),
+		kids: map(c.nets, n => ({ key: n.key, ip: n.ip, prefix: 24 })) };
+	writeJson(tmp('addr.json'), a);
+}
+
+function wanUp() {
+	const s = sh('ifstatus wan 2>/dev/null');
+	if (!s) return true;
+	try { return json(s).up != false; } catch (e) { return true; }
+}
+
+// ---------- 采样 ----------
+function snapshot(ns) {
+	const text = listJSON(cfg.nft);
+	const sta = {};
+	for (let ifc in split(sh(cfg.iw + " dev 2>/dev/null | awk '/Interface/{print $2}'"), '\n'))
+		if (ifc) { const x = parseStations(sh(sprintf('%s dev %s station dump 2>/dev/null', cfg.iw, ifc))); for (let mac in keys(x)) sta[mac] = x[mac]; }
+	return { text, sets: parseSets(text, ns), ct: parseConntrack(fs.readfile(cfg.conntrack), prefixes(ns)), sta, leases: parseLeases(fs.readfile(cfg.leases)), ready: true };
+}
+
+// ---------- 运行时状态 ----------
+let st = {}, prev = {}, lastTick = null, limitKey = null, limitFail = null, lastLimit = 0, ticks = 0;
+let det = null, snapPrev = null, ctState = { seen: {} }, limitedNow = {}, lastBaseSave = 0, dropPrev = {};
+let busy = {}, busyHit = {}, busyMiss = {}, want = {}, seg = {};
+let usage = null, usageDay = '', usageHour = -1, stateHour = -1, lastStatus = null, trend = {};
+let rrmAt = 0, wifiKey = null, baseKey = null;
+let blkConf = null, blkKey = null, blkStat = null, wifiOn = null;
+
+// 设置里没带这个开关的按默认（关）
+function lanFreeOf(ns) { return !!(ns?.lanFree ?? LAN_FREE_DEFAULT); }
+
+// 统计表：打开「家里局域网不计时、不限速」的网络只统计和内网以外的流量；设置变了重新下发
+function baseApply(c) {
+	const gs = map(c.nets, n => ({ ...n, lanFree: lanFreeOf(netSettings(c, n.key)) }));
+	const k = join(',', map(gs, g => g.key + (g.lanFree ? '+lan' : '')));
+	if (k == baseKey) return;
+	if (nftApply(cfg.nft, tmp('base.nft'), baseRuleset(gs)) != 0) return log('统计规则下发失败，见 ' + tmp('base.nft'));
+	if (baseKey != null) log('统计规则更新：' + k);
+	baseKey = k;
+}
+
+function busyStep(key, limited, sig) {
+	if (sig) { busyHit[key] = (busyHit[key] ?? 0) + 1; busyMiss[key] = 0; }
+	else { busyMiss[key] = (busyMiss[key] ?? 0) + 1; busyHit[key] = 0; }
+	if (!busy[key] && busyHit[key] >= WANT_ON) busy[key] = true;
+	else if (busy[key] && busyMiss[key] >= WANT_OFF) busy[key] = false;
+	want[key] = limited && !!busy[key];
+}
+
+// 这一段的开始时刻和下次切换
+function segFor(o, t, inUse) {
+	const k = segOf(o), nx = nextOf(o, t, inUse);
+	let s = seg[o.key];
+	if (!s || s.k != k) s = seg[o.key] = { k, since: t, next: nx };
+	else if (nx == null || s.next == null || nx > s.next + SEG_JITTER || nx < s.next - SEG_JITTER) s.next = nx;
+	return s;
+}
+
+function usageSave() { if (usage && usageDay) writeJson(etc('usage/' + usageDay + '.json'), usage); }
+function usageRoll(day, hour) {
+	if (day != usageDay) {
+		usageSave();
+		usageDay = day;
+		usage = readJson(etc('usage/' + day + '.json'), {});
+		for (let f in usageExpired(fs.lsdir(etc('usage')) ?? [], day)) fs.unlink(etc('usage/' + f));
+	}
+	else if (hour != usageHour && usageHour >= 0) usageSave();
+	usageHour = hour;
+}
+
+function dnsAlive() {
+	const pid = +(fs.readfile(cfg.dnsPid) ?? 0);
+	return pid > 0 && system(sprintf('kill -0 %d 2>/dev/null', pid)) == 0;
+}
+function blockTick(c) {
+	const d = blockDir(etc('blocklist'), readJson(etc('blocklist/manifest.json'), null), cfg.blocklist, readJson(cfg.blocklist + '/manifest.json', null));
+	const b = c.settings.block ?? {};
+	const text = blockMain(d[0], d[1], { ...b, custom: filter(map(b.custom ?? [], cleanDomain), x => x) });
+	if (text != blkConf) {
+		if (fs.readfile(tmp('block.conf')) != text) {
+			writeText(tmp('block.conf'), text);
+			const pid = +(fs.readfile(cfg.dnsPid) ?? 0);
+			if (pid > 0) system(sprintf('kill %d 2>/dev/null', pid));
+			log('屏蔽名单更新：v' + (d[1]?.ver ?? 0) + '，分类 ' + join(' ', c.settings.block?.categories ?? []) + '，自定义 ' + length(c.settings.block?.custom ?? []));
+		}
+		blkConf = text;
+	}
+	const alive = dnsAlive(), devs = alive ? sort(map(c.nets, n => n.dev)) : [];
+	// 家长关了加密 DNS 拦截的网络：DNS 照样走屏蔽名单，只是不拦加密 DNS
+	const guard = filter(devs, d => { for (let n in c.nets) if (n.dev == d) return !netSettings(c, n.key)?.allowDoh; return true; });
+	const key = join(',', devs) + '|' + join(',', guard);
+	if (key != blkKey && nftApply(cfg.nft, tmp('dns.nft'), dnsRuleset(devs, cfg.dnsPort, DOH_IPS, guard)) == 0) {
+		if (blkKey != null || alive) log(alive ? '孩子网络 DNS 转到屏蔽名单' : '屏蔽名单的 DNS 没在跑，孩子网络先用系统 DNS');
+		blkKey = key;
+	}
+	blkStat = { on: alive, ver: d[1]?.ver ?? 0, n: blockCounts(d[1], c.settings.block) };
+}
+
+function windowOf(ns, name) {
+	for (let w in ns.windows) if (w.name == name) return { days: w.days, start: w.start, end: w.end };
+	return null;
+}
+
+// 这个版本第一次跑起来的时间：版本变了、时钟对过了才记，没装过升级程序的新装路由器也有「更新时间」
+function installedAt() {
+	const r = readJson(etc('installed.json'), null);
+	if (r?.version == VERSION) return r.at;
+	if (!exists(tmp('clock'))) return null;
+	const t = now();
+	writeJson(etc('installed.json'), { version: VERSION, at: t });
+	return t;
+}
+
+function routerStatus(id, c) {
+	// 最近一次报到：升级程序报的，或没装升级程序时主程序自己报的，取晚的
+	const a = readJson('/etc/doti-updater/checkin.json', null), b = readJson(etc('checkin.json'), null);
+	const ck = (b?.at ?? 0) > (a?.at ?? 0) ? b : a, up = readJson('/etc/doti-updater/last.json', null);
+	const upd = max(installedAt() ?? 0, up?.at ?? 0);
+	const o = wifiLoad(wifiBins());
+	return { code: id.code, name: c.settings.routerName, version: VERSION, wan: wanUp(), registered: !!id.registered,
+		...(ck?.at ? { lastCheckin: ck.at } : {}), ...(upd ? { upgradedAt: upd } : {}),
+		parentWifiPassword: parentHasPassword(o, id.code), clockSynced: exists(tmp('clock')) };
+}
+
+function saveBaseline() {
+	if (!det) return;
+	writeJson(etc('baseline.json'), detSave(det, now()));
+	det.dirty = false;
+	lastBaseSave = mono();
+}
+
+// ---------- 管控一步 ----------
+function tick(id, c) {
+	const m = mono();
+	const dt = lastTick == null ? 0 : min(DT_MAX, m - lastTick);
+	lastTick = m;
+	const t = now(), lt = localtime(t), day = today(lt);
+	usageRoll(day, lt.hour);
+	let tchanged = false;
+	for (let k in keys(c.today.plans)) if (c.today.plans[k].date != day) { delete c.today.plans[k]; tchanged = true; }
+	if (tchanged) withLock(() => {
+		const cur = readJson(etc('today.json'), null) ?? { seq: 0, plans: {} };
+		for (let k in keys(cur.plans)) if (cur.plans[k].date != day) delete cur.plans[k];
+		writeJson(etc('today.json'), cur);
+	}, t);
+
+	baseApply(c);
+	const snap = snapshot(c.nets);
+	// 家里局域网不计时：这些网络访问内网的连接不进用网判定
+	const lanNets = filter(c.nets, n => lanFreeOf(netSettings(c, n.key)));
+	if (length(lanNets)) {
+		const pf = prefixes(lanNets);
+		for (let k in keys(snap.ct)) { const f = snap.ct[k]; if (isPrivate(f.dst) && length(filter(pf, p => index(f.src, p) == 0))) delete snap.ct[k]; }
+	}
+	const cnt = parseCounters(snap.text);
+	let active = null, devUse = null;
+	if (dt > 0 && snapPrev?.ready && length(keys(snap.sets))) {
+		const learn = {};
+		for (let n in c.nets) learn[n.key] = !!limitedNow[n.key] || lt.hour < 6;
+		const devf = features(snapPrev, snap, dt, int(m), ctState);
+		for (let ip in keys(devf)) {
+			const f = devf[ip];
+			if (!f.net) for (let n in c.nets) if (index(ip, prefixes([n])[0]) == 0) f.net = n.key;
+		}
+		const r = detStep(det, devf, dt, t, { learn });
+		active = r.groups;
+		// 每台设备这一步的在用和流量，按网络分开，记上网记录用
+		devUse = {};
+		for (let ip, f in devf) {
+			if (!f.mac || !f.net) continue;
+			const u = (devUse[f.net] ??= {})[f.mac] ??= { on: !!r.devs[f.mac]?.on, d: 0, u: 0 };
+			u.d += f.dn_b; u.u += f.up_b;
+		}
+		for (let mac, x in r.devs) {
+			if (x.on && x.net) (devUse[x.net] ??= {})[mac] ??= { on: true, d: 0, u: 0 };
+			x.host = det.base[mac]?.host ?? '';
+		}
+		writeJson(tmp('devices.json'), r.devs);
+	}
+	snapPrev = snap;
+	const drops = length(filter(keys(limitedNow), k => limitedNow[k])) ? parseDrops(listJSON(cfg.nft, 'doti_limit')) : {};
+	const on = wifiState(wifiBins(), map(c.nets, n => n.key));
+	if (on) {
+		wifiOn = filter(map(c.nets, n => n.key), k => on[k]);
+		const wk = join(',', wifiOn);
+		if (wifiKey != null && wk != wifiKey) rrmAt = m + 15;
+		wifiKey = wk;
+	}
+	const outs = [], speed = {};
+	for (let n in c.nets) {
+		const ns = netSettings(c, n.key);
+		if (!ns) continue;
+		const k = n.key, cur = cnt[k] ?? { bytes: 0, pkts: 0, up: 0, dn: 0 }, p = prev[k];
+		const okc = p && dt > 0 && cur.bytes >= p.bytes;
+		const db = okc ? cur.bytes - p.bytes : 0, dp = okc && cur.pkts >= p.pkts ? cur.pkts - p.pkts : 0;
+		const dup = okc ? max(0, cur.up - p.up) : 0, ddn = okc ? max(0, cur.dn - p.dn) : 0;
+		if (okc) { speed[k] = { down: int(ddn / dt), up: int(dup / dt) }; trendPush(trend, k, speed[k].down, speed[k].up, TREND_N); }
+		prev[k] = cur;
+		const inUse = active ? !!active[k] : classify(db, dp, dt) != 'idle';
+		const r = ctlStep(toEngine(ns), st[k], c.today.plans[k], { now: t, lt, today: day, dt, inUse });
+		st[k] = r[0];
+		const o = r[1];
+		const dr = drops[k] ?? 0, dd = dr >= (dropPrev[k] ?? 0) ? dr - (dropPrev[k] ?? 0) : dr;
+		dropPrev[k] = dr;
+		if (dt > 0) {
+			busyStep(k, o.limited, dd > 0 || inUse);
+			usageAdd(usage, k, lt.hour, o.limited, inUse ? dt : 0, ddn / 1024.0, dup / 1024.0, devUse?.[k]);
+		}
+		const sg = segFor(o, t, !!busy[k]);
+		const plan = c.today.plans[k];
+		push(outs, { key: k, dev: n.dev, limited: o.limited, kbps: ns.limitKbps ?? LIMIT_KBPS, lanFree: lanFreeOf(ns), net: {
+			key: k, name: ns.name, wifiOn: on ? !!on[k] : null,
+			period: on && !on[k] ? 'wifiOff' : o.period, periodName: o.periodName,
+			since: sg.since, ...(sg.next ? { next: sg.next } : {}),
+			remainSec: o.remainSec, surfMin: ns.surfMin, limitMin: ns.limitMin, dailyMaxMin: ns.dailyMaxMin,
+			usedMinToday: int(o.usedSec / 60), onlineMinToday: onlineMin(usage, k), limitKbps: ns.limitKbps ?? LIMIT_KBPS, want: !!want[k],
+			...(o.period == 'fixedOpen' || o.period == 'fixedLimit' ? { window: windowOf(ns, o.periodName) } : {}),
+			...(plan ? { plan } : {}), ...(speed[k] ? { speed: speed[k] } : {}) } });
+	}
+	for (let o in outs) limitedNow[o.key] = o.limited;
+	blockTick(c);
+	if (det?.dirty && m - lastBaseSave >= BASE_SAVE) saveBaseline();
+
+	const lim = map(filter(outs, o => o.limited), o => ({ key: o.key, dev: o.dev, kbps: o.kbps, lanFree: o.lanFree }));
+	const key = join(',', sort(map(lim, x => x.dev + '@' + x.kbps + (x.lanFree ? '+lan' : ''))));
+	if (key != limitKey || m - lastLimit >= REAPPLY) {
+		if (nftApply(cfg.nft, tmp('limit.nft'), limitRuleset(lim)) == 0) {
+			if (key != limitKey) log('限速网络：' + (join(' ', map(lim, x => x.key)) || '无'));
+			limitKey = key; lastLimit = m;
+		}
+		else if (key != limitFail) { log('限速规则下发失败，见 ' + tmp('limit.nft')); limitFail = key; }
+	}
+	writeJson(tmp('state.json'), st);
+	if (lt.hour != stateHour) { if (stateHour >= 0) writeJson(etc('state.json'), st); stateHour = lt.hour; }
+	writeJson(tmp('usage-now.json'), usage);
+	writeJson(tmp('trend.json'), { step: TICK, nets: trend });
+	lastStatus = { at: t, router: routerStatus(id, c), networks: map(outs, o => o.net), block: blkStat };
+	writeJson(tmp('status.json'), lastStatus);
+	ticks++;
+	if (ticks == CONFIRM_TICKS) writeText(tmp('confirm'), VERSION);
+}
+
+// ---------- 802.11k 邻居 ----------
+let rrmOwn = null;
+function rrmSync() {
+	if (rrmOwn == null) rrmOwn = readJson(tmp('rrm-own.json'), {});
+	const live = {};
+	let fresh = false;
+	for (let x in split(sh(cfg.ubus + " list 'hostapd.*' 2>/dev/null"), '\n')) {
+		x = trim(x);
+		if (!match(x, /^hostapd\.[A-Za-z0-9_.-]+$/)) continue;
+		let v = null;
+		try { v = json(sh(cfg.ubus + ' call ' + x + ' rrm_nr_get_own 2>/dev/null'))?.value; } catch (e) { v = null; }
+		if (type(v) == 'array' && length(v) >= 3) { if (sprintf('%J', rrmOwn[x]) != sprintf('%J', v)) fresh = true; rrmOwn[x] = v; }
+		if (rrmOwn[x]) live[x] = rrmOwn[x];
+	}
+	if (fresh) writeJson(tmp('rrm-own.json'), rrmOwn);
+	let paired = 0;
+	for (let x in keys(live)) {
+		const v = live[x], list = [];
+		for (let y in keys(live)) if (live[y][1] == v[1]) push(list, live[y]);
+		if (length(list) > 1) { sh(cfg.ubus + ' call ' + x + ' rrm_nr_set ' + shq(sprintf('%J', { list })) + ' >/dev/null 2>&1'); paired++; }
+	}
+	return paired > 0 || !length(live);
+}
+
+// ---------- 云端 ----------
+let regFails = 0, regNext = 0, regLast = -100, bk = null;
+
+// 云端没有这台的记录时重新登记
+function lostRegistration(id) {
+	if (!id.registered) return;
+	id.registered = false;
+	writeSecret(etc('identity.json'), id);
+	if (bk) { bk.sentVer = 0; bk.dueAt = now(); writeJson(etc('backup.json'), bk); }
+	regNext = 0;
+	log('云端没有这台的记录了，重新登记');
+}
+
+function clockFix(cloudNow) {
+	if (type(cloudNow) != 'int' || getenv('DOTI_NOW')) return;
+	if (cloudNow - time() > CLOCK_FIX || time() - cloudNow > CLOCK_FIX) {
+		system(['date', '-s', '@' + cloudNow]);
+		log('用云端时间校时');
+	}
+	writeJson(tmp('clock'), { src: 'cloud', at: cloudNow });
+}
+function cloudOk(r) {
+	writeJson(tmp('cloud.json'), { lastOk: now() });
+	clockFix(r?.now);
+}
+function call(id, op, body) {
+	const r = cloudPost(hmacSha256, id, op, now(), body, tmp());
+	if (r?.error == 'NOT_REGISTERED') lostRegistration(id);
+	return r;
+}
+
+function register(id) {
+	const mac = factoryMac();
+	const r = call(id, 'register', { id: id.id, key: id.key, code: id.code, model: trim(fs.readfile('/tmp/sysinfo/model') ?? ''),
+		version: VERSION, ...(mac ? { macHash: sha256('doti-mac|' + mac) } : {}) });
+	if (r?.ok) {
+		id.registered = true;
+		writeSecret(etc('identity.json'), id);
+		cloudOk(r);
+		log('已在云端登记');
+		return true;
+	}
+	if (r?.error == 'EXISTS') {
+		id.id = hexRand(16); id.key = hexRand(32);
+		writeSecret(etc('identity.json'), id);
+		log('设备 ID 已被占用，换一个重新登记');
+	}
+	if (r?.error == 'CLOCK') clockFix(r.now);
+	return false;
+}
+
+// 云端备份
+function backupMark(id, c) {
+	if (!bk) bk = readJson(etc('backup.json'), null) ?? { ver: 0, sentVer: 0, pkey: '', svers: '', dueAt: 0, fmt: 2 };
+	if (bk.fmt != 2) { bk.fmt = 2; bk.svers = ''; }
+	const sv = sprintf('%d|%s', c.settings.globalVer, join(',', map(c.settings.networks, n => n.key + ':' + n.ver))) + '|' + join(',', wifiOn ?? []);
+	// 设置不再上传云端备份：恢复改由家长手机里缓存的备份做（同一台重刷时）
+	if (sv != bk.svers) { bk.svers = sv; writeJson(etc('backup.json'), bk); }
+	const pv = c.parents?.ver ?? 0, pkey = pv + '|' + c.settings.routerName;
+	if (pkey == bk.pkey) return;
+	bk.ver = max(bk.ver + 1, pv);
+	bk.dueAt = now();
+	bk.pkey = pkey;
+	writeJson(etc('backup.json'), bk);
+}
+function backupUpload(id, c) {
+	const ps = c.parents?.parents ?? [];
+	if (!length(ps)) return;
+	const list = sign(hmacSha256, id.key, { t: 'list', d: id.id, e: 0, ver: bk.ver, at: now(), name: c.settings.routerName,
+		parents: map(ps, p => ({ o: p.o, nick: p.nick, avatar: p.avatar, by: p.by, at: p.at })) });
+	const r = call(id, 'backup', { list });
+	if (r?.ok) { bk.sentVer = bk.ver; bk.fails = 0; writeJson(etc('backup.json'), bk); cloudOk(r); log('家长名单已备份（v' + bk.ver + '）'); return; }
+	if (r?.error == 'VERSION' && type(r.ver) == 'int') { bk.ver = r.ver + 1; writeJson(etc('backup.json'), bk); cloudOk(r); return; }
+	if (r?.error == 'CLOCK') { clockFix(r.now); return; }
+	bk.fails = (bk.fails ?? 0) + 1;
+	bk.next = mono() + backoff(bk.fails, 60, 3600);
+}
+
+// 已绑定但 root 还没设密码（绑定在这个功能之前）：用现在的家长 WiFi 密码补上，每次启动查一次
+let rootChecked = false;
+function rootStep(id) {
+	if (rootChecked) return;
+	rootChecked = true;
+	if (rootHash() !== '' || !length(readJson(etc('parents.json'), null)?.parents ?? [])) return;
+	const f = filter(parentIfaces(wifiLoad(wifiBins()), id.code), x => x.ours && x.enc != '' && x.enc != 'none' && length(x.key ?? '') >= 8)[0];
+	if (f && rootFollow(f.key, sha256) == 'set') log('root 密码已设成家长 WiFi 密码');
+}
+
+// 认领限时
+const CLAIM_OPEN = 3600;
+let claimNext = 0;
+function claimStep(id) {
+	const m = mono();
+	if (m < claimNext) return;
+	claimNext = m + 10;
+	const claimed = length(readJson(etc('parents.json'), null)?.parents ?? []) > 0, off = !!fs.stat(etc('temp-off'));
+	if (claimed && !off) return;
+	const b = wifiBins(), ours = filter(parentIfaces(wifiLoad(b), id.code), f => f.ours);
+	if (claimed) {
+		wifiApply(b, cmdsDisabled(ours, true));
+		fs.unlink(etc('temp-off'));
+		log('已认领，家长 WiFi 重新打开');
+		return;
+	}
+	const temp = filter(ours, f => f.ssid == TEMP_SSID && (f.enc == '' || f.enc == 'none'));
+	if (!length(temp)) return;
+	const open = m < +(fs.readfile(tmp('claim-from')) ?? 0) + CLAIM_OPEN;
+	if (open && off) {
+		wifiApply(b, cmdsDisabled(temp, true));
+		fs.unlink(etc('temp-off'));
+		log('开机 1 小时内，临时家长 WiFi 重新打开等认领');
+	}
+	else if (!open && !off && wifiApply(b, cmdsDisabled(temp, false))) {
+		writeText(etc('temp-off'), '' + now());
+		log('1 小时没人认领，临时家长 WiFi 已关闭（断电重开路由器再开 1 小时）');
+	}
+}
+
+// 解除绑定并清除数据
+function unbind(remote) {
+	ensureDirs();
+	const old = identity();
+	if (!remote && old.registered) {
+		const r = call(old, 'unbind', {});
+		log(r?.ok ? '已通知云端删除备份' : '通知云端失败，照样清除本机数据');
+	}
+	const r = withLock(() => {
+		for (let f in ['parents.json', 'today.json', 'baseline.json', 'state.json', 'identity.json', 'backup.json', 'sets.json', 'devnames.json'])
+			fs.unlink(etc(f));
+		for (let f in (fs.lsdir(etc('usage')) ?? [])) fs.unlink(etc('usage/' + f));
+		const id = newIdentity(), ns = nets();
+		writeJson(etc('settings.json'), settingsDefaults(map(ns, n => n.key), id.code));
+		const b = wifiBins(), o = wifiLoad(b), cmds = [];
+		for (let n in ns) {
+			const pw = randDigits(8);
+			for (let f in ifacesOf(o, kidNet(n.key))) {
+				push(cmds, 'set wireless.' + f.sec + '.disabled=1');
+				push(cmds, 'set wireless.' + f.sec + '.ssid=' + shq('DOTI-' + id.code + '-0' + substr(n.key, 1)));
+				push(cmds, 'set wireless.' + f.sec + '.key=' + shq(pw));
+			}
+		}
+		for (let f in filter(parentIfaces(o, old.code), x => x.ours)) {
+			push(cmds, 'set wireless.' + f.sec + '.ssid=' + shq(TEMP_SSID));
+			push(cmds, 'set wireless.' + f.sec + '.encryption=none');
+			push(cmds, 'delete wireless.' + f.sec + '.key');
+		}
+		for (let x in cmds) system(b.uci + ' ' + x);
+		system(b.uci + ' commit wireless');
+		system('(sleep 2; ' + b.wifi + ' reload) >/dev/null 2>&1 &');
+		if (rootRelease(sha256)) log('root 密码是跟着家长 WiFi 设的，已清空');
+		return id;
+	});
+	if (r[1]) { log('解除绑定：拿不到锁'); return 1; }
+	writeText(tmp('claim-from'), '' + mono());
+	writeText(tmp('gen'), '' + (gen() + 1));
+	log('已解除绑定并清除数据，新编号 ' + r[0].code);
+	return 0;
+}
+
+// 处理升级程序报到带回的收件箱
+let ckFails = 0, ckNext = 0;
+function checkinDue(id, t) {
+	const ck = readJson(etc('checkin.json'), null), lt = localtime(t);
+	if (!ck?.at || t - ck.at > 26 * 3600) return true;
+	const spread = (ord(id.id, 0) * 256 + ord(id.id, 1)) % 14400, sec = lt.hour * 3600 + lt.min * 60 + lt.sec;
+	return ck.day != today(lt) && sec >= 7200 + spread && sec < 6 * 3600;
+}
+function applyList(fn) {
+	const r = withLock(() => {
+		const L = readJson(etc('parents.json'), null) ?? emptyList();
+		const before = L.ver;
+		fn(L);
+		if (L.ver != before) writeJson(etc('parents.json'), L);
+		return L.ver != before;
+	});
+	if (r[0]) writeText(tmp('gen'), '' + (gen() + 1));
+}
+function applyCheckin(id, r) {
+	const opt = { now: r.now, clockOk: true };
+	if (r.wipe) { log('家长远程解除了绑定'); unbind(true); return; }
+	for (let cred in (r.joins ?? [])) {
+		const v = verify(hmacSha256, id.key, cred, 'join', id.id, opt);
+		if (v[0]) applyList(L => { const x = listJoin(L, v[0], '', now()); if (!x[1]) log('报到带来的加入凭证已写入名单'); });
+	}
+	if (r.removes) {
+		const v = verify(hmacSha256, id.key, r.removes, 'remove', id.id, opt);
+		if (v[0]) applyList(L => { for (let o in v[0].o) if (!listRemove(L, o)[1]) log('按远程操作移除了一位家长'); });
+	}
+	if (r.noBackup) {
+		if (!bk) bk = readJson(etc('backup.json'), null) ?? { ver: 0, sentVer: 0, pkey: '', svers: '', dueAt: 0 };
+		bk.sentVer = 0; bk.dueAt = now(); bk.svers = ''; writeJson(etc('backup.json'), bk);
+	}
+}
+function inboxStep(id) {
+	for (let f in sort(fs.lsdir(tmp('inbox')) ?? [])) {
+		const x = readJson(tmp('inbox/' + f), null);
+		fs.unlink(tmp('inbox/' + f));
+		if (type(x?.now) == 'int') { applyCheckin(id, x); if (x.wipe) return; }
+	}
+}
+function checkin(id, c) {
+	const on = wifiState(wifiBins(), map(c.nets, n => n.key)) ?? {};
+	const sets = readJson(etc('sets.json'), null)?.sets;
+	const r = call(id, 'checkin', { version: VERSION, updater: '', lastUpgrade: 0, claimed: length(c.parents?.parents ?? []) > 0,
+		kidNets: length(filter(keys(on), k => on[k])), haveCurrent: true, ...(sets ? { sets } : {}) });
+	if (!r?.ok) { if (r?.error == 'CLOCK') clockFix(r.now); return false; }
+	if (sets && readJson(etc('sets.json'), null)?.sets === sets) fs.unlink(etc('sets.json'));
+	cloudOk(r);
+	const lt = localtime(now());
+	writeJson(etc('checkin.json'), { day: today(lt), at: now() });
+	applyCheckin(id, r);
+	return true;
+}
+
+function cloudStep(id, c) {
+	if (takeMark('unregistered')) lostRegistration(id);
+	const m = mono(), want = takeMark('register');
+	if (!id.registered) {
+		if (m >= regNext || (want && m - regLast >= 30)) {
+			regLast = m;
+			if (register(id)) regFails = 0;
+			else { regFails++; regNext = m + backoff(regFails, 60, 3600); }
+		}
+		return;
+	}
+	inboxStep(id);
+	if (!exists(cfg.updater) && m >= ckNext && checkinDue(id, now())) {
+		if (checkin(id, c)) ckFails = 0;
+		else { ckFails++; ckNext = m + backoff(ckFails, 60, 3600); }
+		return;
+	}
+	takeMark('backup');
+	backupMark(id, c);
+	if (bk.ver > bk.sentVer && now() >= bk.dueAt && m >= (bk.next ?? 0)) backupUpload(id, c);
+}
+
+// 基本状态（路由器管理页 LuCI 只读显示用）：不含设备 ID、密钥、密码
+function info() {
+	const id = readJson(etc('identity.json'), null) ?? {}, st = fs.stat(tmp('status.json'));
+	const a = readJson('/etc/doti-updater/checkin.json', null), b = readJson(etc('checkin.json'), null);
+	const ck = (b?.at ?? 0) > (a?.at ?? 0) ? b : a, up = readJson('/etc/doti-updater/last.json', null);
+	const act = trim(fs.readfile('/etc/doti-updater/active') ?? '');
+	const uv = match((act ? fs.readfile('/etc/doti-updater/slot-' + act + '/doti-update.uc') : null) ?? fs.readfile('/usr/share/doti-updater/doti-update.uc') ?? '', /const VERSION = '([^']+)'/);
+	const pw = id.code ? parentHasPassword(wifiLoad(wifiBins()), id.code) : false;
+	return { version: VERSION, updater: uv ? uv[1] : '', running: exists(tmp('running')) && !!st && now() - st.mtime < 90,
+		code: id.code ?? '', registered: !!id.registered, parents: length(readJson(etc('parents.json'), null)?.parents ?? []), kidNets: length(nets()),
+		parentWifi: pw ? 'DOTI-' + id.code + '-ADMIN' : TEMP_SSID, lastCheckin: ck?.at ?? 0,
+		...(up ? { lastUpgrade: { from: up.prev, to: up.to, result: up.result, reason: up.reason ?? '', at: up.at } } : {}) };
+}
+
+// ---------- 命令 ----------
+function run() {
+	ensureDirs();
+	fs.unlink(tmp('off'));
+	writeText(tmp('running'), '1');
+	let id = identity();
+	fs.chmod(etc('identity.json'), 0600);   // 老版本写出来的是 644
+	let c = loadConf(id);
+	if (!length(c.nets)) { log('没有孩子网络（/etc/doti/nets.json），退出'); return 1; }
+	writeAddr(c);
+	// 硬件指纹（出厂 MAC 的哈希，重刷不变）：发现接口带上，家长手机认出是不是以前那台（恢复用）
+	const mac = factoryMac();
+	if (mac) writeText(tmp('hw'), sha256('doti-mac|' + mac));
+	baseApply(c);
+	st = readJson(tmp('state.json'), null) ?? readJson(etc('state.json'), {});
+	det = detCreate(readJson(etc('baseline.json'), null));
+	lastBaseSave = mono();
+	let nextTick = 0, nextRrm = mono() + 30, seen = gen();
+	setApplied(seen);
+	log('启动 ' + VERSION + '，编号 ' + id.code);
+	while (!exists(tmp('off'))) {
+		const m = mono(), g = gen();
+		if (g != seen) {
+			id = identity();
+			c = loadConf(id);
+			tick(id, c);
+			nextTick = mono() + TICK;
+			setApplied(g);
+			seen = g;
+		}
+		else if (m >= nextTick) { tick(id, c); nextTick = m + TICK; }
+		cloudStep(id, c);
+		claimStep(id);
+		rootStep(id);
+		if (m >= nextRrm || (rrmAt && m >= rrmAt)) { rrmAt = 0; nextRrm = m + (rrmSync() ? REAPPLY : 60); }
+		if (getenv('DOTI_ONCE')) break;
+		if (vclock != null) { vclock++; if (--loops <= 0) break; continue; }
+		sleep(1000);
+	}
+	saveBaseline();
+	usageSave();
+	writeJson(etc('state.json'), st);
+	fs.unlink(tmp('running'));
+	return 0;
+}
+
+function stop() {
+	ensureDirs();
+	writeText(tmp('off'), '1');
+	for (let i = 0; i < 30 && exists(tmp('running')); i++) sleep(100);
+	nftApply(cfg.nft, tmp('off.nft'), removeAll);
+	log('管控已停止');
+	return 0;
+}
+
+
+const cmd = ARGV[0];
+if (cmd == 'run') exit(run());
+else if (cmd == 'init') { ensureDirs(); print(identity().code + '\n'); exit(0); }
+else if (cmd == 'id') { print(identity().id + '\n'); exit(0); }
+else if (cmd == 'info') { print(sprintf('%J\n', info())); exit(0); }
+else if (cmd == 'status') { print(sprintf('%J\n', readJson(tmp('status.json'), {}))); exit(0); }
+else if (cmd == 'stop') exit(stop());
+else if (cmd == 'unbind') exit(unbind(ARGV[1] == '--remote'));
+else { warn('用法：doti run | init | id | status | stop | unbind\n'); exit(2); }

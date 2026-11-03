@@ -1,0 +1,12 @@
+# 一点守护 · 可选分类：短视频（家长打开才屏蔽，默认关）。一行一个域名（同时屏蔽所有子域名）。
+# 收录抖音、快手、微视、TikTok 的主要域名。
+douyin.com
+iesdouyin.com
+amemv.com
+douyinvod.com
+douyinpic.com
+kuaishou.com
+gifshow.com
+weishi.qq.com
+tiktok.com
+tiktokv.com

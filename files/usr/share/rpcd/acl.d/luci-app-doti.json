@@ -1,0 +1,11 @@
+{
+	"luci-app-doti": {
+		"description": "一点守护：只读状态",
+		"read": {
+			"cgi-io": [ "exec" ],
+			"file": {
+				"/usr/sbin/doti info": [ "exec" ]
+			}
+		}
+	}
+}
