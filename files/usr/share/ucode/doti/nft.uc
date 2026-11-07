@@ -45,13 +45,23 @@ export function isPrivate(ip) {
 // DNS 转发表：devs 的 DNS 都转到屏蔽名单；guard 是其中还要拦加密 DNS（853 端口、常见加密 DNS 服务器的 443）的网络，
 // 家长关了加密 DNS 拦截的网络不在里面（没传 guard 就是全拦）
 export function dnsRuleset(devs, port, dohIps, guard) {
+	// port：数字（都转到同一个），或 { 网卡: 端口 }（每个孩子网络一个屏蔽 DNS）
 	let s = 'table inet doti_dns\ndelete table inet doti_dns\n';
 	if (!length(devs)) return s;
-	const set = join(', ', map(devs, d => '"' + d + '"'));
 	s += 'table inet doti_dns {\n';
 	if (length(dohIps)) s += sprintf('\tset doh { type ipv4_addr; elements = { %s } }\n', join(', ', dohIps));
 	s += '\tchain redir {\n\t\ttype nat hook prerouting priority dstnat - 1; policy accept;\n';
-	s += sprintf('\t\tiifname { %s } udp dport 53 redirect to :%d\n\t\tiifname { %s } tcp dport 53 redirect to :%d\n', set, port, set, port);
+	const byPort = {};
+	for (let d in devs) {
+		const p = type(port) == 'object' ? port[d] : port;
+		if (!p) continue;
+		if (!byPort[p]) byPort[p] = [];
+		push(byPort[p], d);
+	}
+	for (let p in sort(keys(byPort))) {
+		const set = join(', ', map(byPort[p], d => '"' + d + '"'));
+		s += sprintf('\t\tiifname { %s } udp dport 53 redirect to :%s\n\t\tiifname { %s } tcp dport 53 redirect to :%s\n', set, p, set, p);
+	}
 	s += '\t}\n\tchain nodoh {\n\t\ttype filter hook forward priority -5; policy accept;\n';
 	guard ??= devs;
 	if (length(guard)) {

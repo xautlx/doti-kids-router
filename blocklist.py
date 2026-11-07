@@ -11,7 +11,7 @@ import hashlib, json, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, 'blocklist')
-CATS = ['always', 'game', 'shortvideo', 'video']
+CATS = ['always', 'game', 'shortvideo', 'film']
 CANARY = ['use-application-dns.net', 'mask.icloud.com', 'mask-h2.icloud.com']
 DOH_NAMES = ['dns.google', 'dns.google.com', 'cloudflare-dns.com', 'mozilla.cloudflare-dns.com', 'one.one.one.one', 'dns.quad9.net',
              'doh.pub', 'dot.pub', 'dns.alidns.com', 'doh.360.cn', 'dot.360.cn', 'dns.adguard.com', 'dns.adguard-dns.com', 'doh.opendns.com', 'dns.nextdns.io']

@@ -13,18 +13,20 @@ import { KEEP_DAYS as SUM_DAYS, monthOf, summarize } from 'doti.summary';
 import { adminSsid, apply as wifiApply, bins as wifiBins, cmdsDisabled, cmdsKey, cmdsParent, ifacesOf, kidNet, load as wifiLoad, parentIfaces, parentTargets, randDigits, shq, state as wifiState, validPassword } from 'doti.wifi';
 
 const OPS = opsMake({ settings: { defaults, merge: settingsMerge }, store: { etc, readJson, withLock, writeJson },
-	wifi: { apply: wifiApply, bins: wifiBins, cmdsDisabled, ifacesOf, kidNet, load: wifiLoad, state: wifiState } });
+	wifi: { apply: wifiApply, bins: wifiBins, cmdsDisabled, cmdsKey, cmdsParent, adminSsid, parentTargets, parentIfaces, validPassword, ifacesOf, kidNet, load: wifiLoad, state: wifiState },
+	root: pw => rootFollow(pw, sha256), sha: sha256, now: () => getenv('DOTI_NOW') ? +getenv('DOTI_NOW') : time() });
 const netKeys = OPS.netKeys, saveSettings = OPS.saveSettings, settingsOf = OPS.settingsNow, todayApply = OPS.today, wifiToggle = OPS.wifiToggle;
 const MAX_BODY = 16384, RESTORE_MAX = 163840, AVATAR_MAX = 8192, CLOCK_FIX = 120, STALE = 30;
 const PUB = { hello: 'GET', look: 'GET' };
 const ADMIN = { claim: 'POST', backup: 'GET', join: 'POST', status: 'GET', settings: '*', today: 'POST',
-	wifi: '*', usage: 'GET', summary: 'GET', speed: 'GET', device: 'POST', parents: '*', unbind: 'POST', time: 'POST' };
+	wifi: '*', usage: 'GET', summary: 'GET', speed: 'GET', device: 'POST', parents: '*', unbind: 'POST', member: 'POST', time: 'POST' };
 const SLOW = { claim: true, join: true };
 const MSG = {
 	BAD_REQUEST: '参数不对', UNAUTHORIZED: '身份已过期，请重试', NOT_PARENT: '你还不是这台路由器的家长，请让家长邀请你',
 	FORBIDDEN_ORIGIN: '请求来源不对', NOT_REGISTERED: '路由器正在连接云端，请稍后再试',
 	CLAIMED: '这台路由器已经有家长了', CONFLICT: '刚被别人改过，请刷新后再改', FULL: '家长已满 10 人', USED: '这个邀请已经用过了',
 	EXPIRED: '已过期', INVITER_GONE: '邀请已失效，请重新邀请', LAST_PARENT: '你是最后一位家长，退出等于解除绑定',
+	LATE: '开放的时间已经过了', STALE: '在家已经改过这个网络的临时安排',
 	KEEP_ONE: '至少要留一个孩子 WiFi 开着', PASSWORD: 'WiFi 密码要 8–63 位，只能用英文字母、数字和常见符号', NO_WIFI: '没找到这个 WiFi',
 	LIMIT: '操作太频繁，请稍后再试', INTERNAL: '路由器出错了，请稍后再试', NOT_KID: '要连着孩子的 WiFi 才能看'
 };
@@ -137,6 +139,7 @@ function offline(t) {
 	const c = readJson(tmp('cloud.json'), null);
 	return c?.lastOk ? t - c.lastOk > 86400 : false;
 }
+function memberUntil() { return readJson(etc('member.json'), null)?.x; }
 function cleanAvatar(a) { return type(a) == 'string' && length(a) <= AVATAR_MAX && substr(a, 0, 11) == 'data:image/' ? a : ''; }
 function savedParents(list) { writeJson(etc('parents.json'), list); mark('backup'); bumpGen(); }
 
@@ -147,9 +150,10 @@ H.hello = (c) => {
 	const id = identity(), s = settingsNow(id);
 	const base = { code: id.code, name: s.routerName };
 	if (!id.registered) mark('register');
-	const hw = trim(fs.readfile(tmp('hw')) ?? '');
+	const hw = trim(fs.readfile(tmp('hw')) ?? ''), m = memberUntil();
 	return ok({ ...base, version: c.version, claimed: length(parentsList().parents) > 0, registered: !!id.registered,
-		net: c.src == 'kid' ? 'kid' : 'parent', ...(c.kid ? { kid: c.kid } : {}), deviceId: id.id, ...(hw ? { hw } : {}) });
+		net: c.src == 'kid' ? 'kid' : 'parent', ...(c.kid ? { kid: c.kid } : {}), deviceId: id.id, ...(hw ? { hw } : {}),
+		remote: true, ...(m ? { member: m } : {}) });   // remote：远程管理版程序（小程序据此显示开通入口）
 };
 
 // 绑定并设置：首次设置一次做完——绑定、恢复（同一台重刷时家长手机里缓存的备份）或给孩子网络起名、打开孩子 WiFi、家长 WiFi 改名设密码。
@@ -211,13 +215,11 @@ H.claim = (c) => {
 // 备份：家长手机缓存最后管的那台的完整设置和家人（含身份），同一台重刷后绑定时一起带回来（不经云端）
 // 开着的孩子 WiFi 按配置算（不按实际状态）：刚开关过 WiFi 时热点在重启，实际状态是全关，备份就记错了
 // wifi：家长 WiFi（admin）和各孩子 WiFi 的密码，恢复时原样写回（只存家长手机本地，不经云端）
+// pwAt：各 WiFi 密码最后改动的时间（路由器时间），手机和云端报的比，就知道自己记的密码是不是旧的
 H.backup = (c) => {
-	const keys = netKeys(), o = wifiLoad(wifiBins()), wifi = {};
-	for (let k in keys) { const f = ifacesOf(o, kidNet(k))[0]; if (f?.key) wifi[k] = f.key; }
-	const p = filter(parentIfaces(o, c.id.code), x => x.ours && x.key)[0];
-	if (p) wifi.admin = p.key;
+	const keys = netKeys(), o = wifiLoad(wifiBins()), wifi = OPS.wifiKeys(c.id.code);
 	return ok({ hw: trim(fs.readfile(tmp('hw')) ?? ''), code: c.id.code, settings: settingsNow(c.id),
-		on: filter(keys, k => length(filter(ifacesOf(o, kidNet(k)), f => f.disabled != '1')) > 0), wifi, parents: parentsList().parents });
+		on: filter(keys, k => length(filter(ifacesOf(o, kidNet(k)), f => f.disabled != '1')) > 0), wifi, pwAt: OPS.pwStamp(c.id.code, c.now), parents: parentsList().parents });
 };
 
 H.join = (c) => {
@@ -240,9 +242,9 @@ function statusNow(c) {
 	const s = readJson(tmp('status.json'), null);
 	const st = fs.stat(tmp('status.json'));
 	if (s && st && c.now - st.mtime <= STALE) return { router: s.router, networks: s.networks };
-	const set = settingsNow(c.id);
+	const set = settingsNow(c.id), m = memberUntil();
 	return { router: { ...(s?.router ?? { code: c.id.code, name: set.routerName, version: c.version, registered: !!c.id.registered,
-			clockSynced: clockOk() }), running: false },
+			...(m ? { member: m } : {}), clockSynced: clockOk() }), running: false },
 		networks: map(s?.networks ?? set.networks, n => ({ key: n.key, name: n.name })) };
 }
 H.status = (c) => ok(statusNow(c));
@@ -252,6 +254,8 @@ H.status = (c) => ok(statusNow(c));
 const OPEN = { smartOpen: true, fixedOpen: true, tempOpen: true, allOpen: true };
 H.look = (c) => {
 	if (!c.kid) return fail('NOT_KID');
+	// 孩子打开查看页、点了刷新：让常驻程序马上和云端同步一次（限频在常驻程序里：会员 30 秒、没会员兜底 1 小时）
+	if (query('sync') == '1') mark('look');
 	const set = settingsNow(c.id);
 	let ns = null, net = null;
 	for (let n in set.networks) if (n.key == c.kid) ns = n;
@@ -291,7 +295,9 @@ H.settings = (c) => {
 
 H.today = (c) => {
 	const b = c.body;
-	const r = todayApply(b, listIndex(parentsList(), c.who) + 1, c.now);
+	// at：回家直接执行远程排队的临时安排时带上那条的发出时间，开放从那时算（只认一天内的）
+	const at = type(b?.at) == 'int' && b.at <= c.now && b.at > c.now - 86400 ? b.at : null;
+	const r = todayApply(b, listIndex(parentsList(), c.who) + 1, c.now, at);
 	if (r[1]) return fail(r[1]);
 	const applied = waitApplied(bumpGen(), c.now);
 	let net = null;
@@ -398,6 +404,16 @@ H.unbind = (c) => {
 	return true;
 };
 
+H.member = (c) => {
+	const v = verify(hmacSha256, c.id.key, c.body.credential, 'member', c.id.id, { now: c.now, clockOk: clockOk(), offline: offline(c.now) });
+	if (v[1]) return fail(v[1] == 'expired' ? 'EXPIRED' : 'BAD_REQUEST');
+	writeJson(etc('member.json'), { x: v[0].x, cred: c.body.credential, at: c.now });
+	// 家长在家开通时小程序顺手告诉路由器总开关已打开，不用等第二天报到
+	if (c.body.remote === true) writeJson(etc('remote.json'), { on: true, at: c.now });
+	bumpGen();
+	return ok({ member: v[0].x });
+};
+
 H.time = (c) => {
 	const p = c.body.now;
 	if (type(p) != 'int' || p < 1700000000) return fail('BAD_REQUEST');
@@ -430,6 +446,7 @@ H.wifi = (c) => {
 		const e = wifiToggle(q.key, q.on);
 		if (e) return fail(e);
 		noteWho(c, [q.key], 'w');
+		mark('report');
 		return ok({ key: q.key, want: q.on });
 	}
 	if (q.op == 'setup') {
@@ -445,23 +462,22 @@ H.wifi = (c) => {
 		for (let x in cmdsParent(ifs, q.password, code)) push(cmds, x);
 		wifiApply(b, cmds);
 		rootFollow(q.password, sha256);
+		OPS.pwStamp(code, c.now);
+		mark('report');
 		return ok({ ssid: adminSsid(code) });
 	}
+	// 换孩子 WiFi 密码：带 password 就用它（家长自己输或手机随机生成），不带由路由器随机生成 8 位数字
 	if (q.op == 'regen') {
 		if (index(keys, q.key) < 0) return fail('BAD_REQUEST');
-		const ifs = ifacesOf(o, kidNet(q.key));
-		if (!length(ifs)) return fail('NO_WIFI');
-		const pw = randDigits(8);
-		wifiApply(b, cmdsKey(ifs, pw));
-		return ok({ key: q.key, ssid: ifs[0].ssid, password: pw });
+		const pw = q.password != null ? q.password : randDigits(8);
+		const r = OPS.setPassword(q.key, pw, code);
+		if (!r[1]) mark('report');
+		return r[1] ? fail(r[1]) : ok({ key: q.key, ssid: r[0], password: pw });
 	}
 	if (q.op == 'setParent') {
-		if (!validPassword(q.password)) return fail('PASSWORD');
-		const ifs = parentTargets(o, code);
-		if (!length(ifs)) return fail('NO_WIFI');
-		wifiApply(b, cmdsParent(ifs, q.password, code));
-		rootFollow(q.password, sha256);
-		return ok({ key: 'admin', ssid: adminSsid(code) });
+		const r = OPS.setPassword('admin', q.password, code);
+		if (!r[1]) mark('report');
+		return r[1] ? fail(r[1]) : ok({ key: 'admin', ssid: r[0] });
 	}
 	return fail('BAD_REQUEST');
 };

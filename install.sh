@@ -29,7 +29,7 @@ elif command -v apk >/dev/null 2>&1; then PM=apk
 else die "没找到软件包管理器（opkg 或 apk），这个系统装不了"; fi
 nft -v >/dev/null 2>&1 || command -v fw4 >/dev/null 2>&1 || die "这个系统没有 firewall4（nftables），一点守护需要官方 OpenWrt 22.03 及以上"
 free=$(df -k /overlay 2>/dev/null | awk 'NR==2 {print $4}')
-[ -n "$free" ] && [ "$free" -lt 400 ] && die "路由器剩余空间只有 ${free}KB，至少要 400KB"
+[ -n "$free" ] && [ "$free" -lt 800 ] && die "路由器剩余空间只有 ${free}KB，至少要 800KB（一点守护和它要的门铃组件 mosquitto-client-nossl；最低配置 16MB 闪存、64MB 内存）"
 
 # 2 刚开机时网络和防火墙还在初始化，这时下载容易失败
 up=$(cut -d. -f1 /proc/uptime)
@@ -88,7 +88,7 @@ if ! inst; then
 	say "安装没成功，更新软件源后再试一次……"
 	if [ "$PM" = apk ]; then apk update >/dev/null 2>&1; else opkg update >/dev/null 2>&1; fi || \
 		die "软件源更新失败：路由器上不了网，或软件源地址连不上。国内网络可以先换清华镜像，见 https://doti.entdiy.xyz/quick-start/"
-	inst || die "安装失败，请把上面的出错信息发给客服（小程序「一点守护」→「联系客服」）"
+	inst || die "安装失败：常见原因是这台路由器的软件源里没有门铃组件 mosquitto-client-nossl，或空间不够（最低 16MB 闪存、64MB 内存，这样的路由器暂不支持）。请把上面的出错信息发给客服（小程序「一点守护」→「联系客服」）"
 fi
 rm -rf "$TMP"
 say "✓ 安装完成（$ver）"

@@ -1,0 +1,38 @@
+# 一点守护 · 可选分类：影视（看剧、看电影的平台；家长打开才屏蔽，默认关；有几个孩子网络时可以只挡其中几个）。
+# 一行一个域名（同时屏蔽所有子域名），# 后面是注释。只收娱乐类视频平台；央视、央视频、各地广电等正规、有教育意义的视频网站不收。
+# 字节、腾讯、阿里、百度等公司的通用域名（bytedance.com、snssdk.com、pstatp.com、byteimg.com、qq.com、gtimg.com、qpic.cn、
+# alicdn.com、baidu.com 等）会连带豆包、飞书、今日头条、微信、支付、搜索，一律不收，只收各平台专用的域名。
+# 按平台主业归类：主业是刷短视频、直播的进「短视频和直播」，看剧看电影的进这里；影视 App 里夹带的短视频专区和影视同一批域名，挡不了。
+
+# 腾讯视频（只收视频子域名，不收 qq.com）
+v.qq.com
+video.qq.com
+film.qq.com
+
+# 爱奇艺
+iqiyi.com
+qiyi.com
+qy.net
+iqiyipic.com
+qiyipic.com
+71.am
+
+# 优酷
+youku.com
+ykimg.com
+
+# 芒果 TV
+mgtv.com
+hitv.com
+imgo.tv
+
+# 其他
+tv.sohu.com       # 搜狐视频
+tv.itc.cn
+pptv.com
+miguvideo.com     # 咪咕视频
+funshion.com      # 风行
+rr.tv             # 人人视频
+vcinema.cn        # 南瓜电影
+hanju.koudaibaobao.com # 韩剧 TV
+netflix.com

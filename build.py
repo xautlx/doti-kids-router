@@ -18,11 +18,11 @@ PKG, FULL = 'doti', f'{VERSION}-1'
 EXEC = ('usr/sbin/', 'usr/libexec/doti/', 'etc/init.d/', 'etc/uci-defaults/')
 CGI = '/usr/libexec/doti/cgi'
 PUB = ['hello', 'look']
-ADMIN = ['claim', 'backup', 'join', 'status', 'settings', 'today', 'wifi', 'usage', 'summary', 'speed', 'device', 'parents', 'unbind', 'time']
+ADMIN = ['claim', 'backup', 'join', 'status', 'settings', 'today', 'wifi', 'usage', 'summary', 'speed', 'device', 'parents', 'unbind', 'member', 'time']
 
 CONTROL = f"""Package: {PKG}
 Version: {FULL}
-Depends: libc, ucode, ucode-mod-fs, uhttpd, nftables, firewall4, uclient-fetch, ca-bundle
+Depends: libc, ucode, ucode-mod-fs, uhttpd, nftables, firewall4, uclient-fetch, ca-bundle, mosquitto-client-nossl
 Section: net
 Architecture: all
 Maintainer: 一点守护
@@ -227,12 +227,12 @@ def data_entries(upd, upd_name='doti-updater.ipk'):
     cu = os.environ.get('DOTI_CLOUD_URL') or (open(os.path.join(HERE, 'cloud.url')).read().strip() if os.path.exists(os.path.join(HERE, 'cloud.url')) else '')
     if cu:
         out.append(('./usr/share/doti/cloud', (cu + '\n').encode(), 0o644))
-    # 备用云端地址（主地址网络不通时用）
+    else:
+        print('提醒：没有云端地址（DOTI_CLOUD_URL 或 device/cloud.url），这个包连不上云端')
+    # 备用云端地址（可选，主地址网络不通时用；现在没有）
     bp = os.path.join(HERE, 'cloud-backup.url')
     if not os.environ.get('DOTI_CLOUD_URL') and os.path.exists(bp):
         out.append(('./usr/share/doti/cloud-backup', (open(bp).read().strip() + '\n').encode(), 0o644))
-    else:
-        print('提醒：没有云端地址（DOTI_CLOUD_URL 或 device/cloud.url），这个包连不上云端')
     v = (VERSION + '\n').encode()
     out.append(('./usr/share/doti/version', v, 0o644))
     ub = open(upd, 'rb').read()

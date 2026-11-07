@@ -3,7 +3,7 @@
 'use strict';
 import * as fs from 'fs';
 
-const VERSION = '1.0.7';
+const VERSION = '1.1.0';
 const PKG = 'doti';
 const cfg = {
 	dir: getenv('DOTI_UPD_DIR') || '/etc/doti-updater',
@@ -19,6 +19,8 @@ const cfg = {
 	ucode: getenv('DOTI_UCODE') || 'ucode',
 	ubus: getenv('DOTI_UBUS') || 'ubus',
 	main: getenv('DOTI_MAIN') || '/usr/sbin/doti',
+	initd: getenv('DOTI_INITD') || '/etc/init.d/doti',
+	nft: getenv('DOTI_NFT') || 'nft',
 	overlay: getenv('DOTI_OVERLAY') || '/overlay',
 	wait: +(getenv('DOTI_UPD_WAIT') || 600),
 	step: +(getenv('DOTI_UPD_STEP') || 5000)
@@ -239,6 +241,18 @@ function lock() {
 }
 function unlock() { fs.rmdir(cfg.tmp + '/doti-updater.lock'); }
 
+// ---------- 放开网络 ----------
+// 停管控、删掉一点守护的全部规则表（限速、屏蔽、统计），孩子网络全部放开。管控程序坏到停不下来也照样删表。
+// 宁可短时间不管，也不能卡在限速、全家没法上网
+const TABLES = ['doti', 'doti_limit', 'doti_dns'];
+function failOpen() {
+	system(sprintf('%s stop >/dev/null 2>&1', shq(cfg.initd)));
+	for (let t in TABLES) system(sprintf('%s delete table inet %s >/dev/null 2>&1', cfg.nft, t));
+}
+function mainStart() { system(sprintf('%s start >/dev/null 2>&1', shq(cfg.initd))); }
+function rulesOn() { return system(sprintf('%s list table inet doti_limit >/dev/null 2>&1', cfg.nft)) == 0; }
+function uptime() { const u = fs.readfile(getenv('DOTI_UPTIME') || '/proc/uptime'); return u != null ? +split(u, ' ')[0] : 0; }
+
 // ---------- 体检、回滚 ----------
 function radiosUp() {
 	let w = null;
@@ -273,12 +287,15 @@ function bad() { return readJson(F('bad.json'), []); }
 function markBad(v) { const b = bad(); if (index(b, v) < 0) push(b, v); writeJson(F('bad.json'), b); }
 function rollback(prev, to, why) {
 	markBad(to);
-	if (!fs.stat(cur())) { result(prev, to, 'fail', why + '；没有本地旧包，没法回滚'); return; }
+	if (!fs.stat(cur())) { failOpen(); result(prev, to, 'fail', why + '；没有本地旧包，没法回滚，已放开网络'); return; }
 	const t0 = now();
 	fs.unlink(cfg.run + '/confirm');
+	failOpen();
 	pkgInstall(cur());
+	mainStart();
 	const w = health(prev, t0);
-	result(prev, to, w ? 'fail' : 'rollback', why + (w ? '；回滚后仍不正常：' + w : ''));
+	if (w) failOpen();   // 回滚了还不正常：保持放开，等报到报上去
+	result(prev, to, w ? 'fail' : 'rollback', why + (w ? '；回滚后仍不正常：' + w + '，已放开网络' : ''));
 }
 
 // ---------- 安装 ----------
@@ -300,8 +317,10 @@ function install(o) {
 	const t0 = now();
 	writeJson(F('state.json'), { prev, to: o.version, at: t0 });
 	fs.unlink(cfg.run + '/confirm');
-	log(sprintf('开始升级 %s → %s', prev, o.version));
+	log(sprintf('开始升级 %s → %s（先停管控、放开网络）', prev, o.version));
+	failOpen();
 	pkgInstall(f);
+	mainStart();
 	const why = health(o.version, t0);
 	if (why) rollback(prev, o.version, why);
 	else { keepNew(f, o.version); result(prev, o.version, 'ok'); }
@@ -371,7 +390,9 @@ function kidNets() { let n = 0; for (let x in (readJson(cfg.run + '/status.json'
 // 交给主程序的部分写进收件箱
 function inbox(r) {
 	const x = { now: r.now };
-	for (let k in ['joins', 'removes', 'wipe', 'noBackup']) if (r[k] != null) x[k] = r[k];
+	for (let k in ['member', 'joins', 'removes', 'wipe', 'noBackup', 'remote']) if (r[k] != null) x[k] = r[k];
+	// 远程管理总开关（remote）只在变了时交：省得天天写收件箱、天天让主程序重读配置
+	if (r.remote != null && (readJson(cfg.etc + '/remote.json', null)?.on === true) == !!r.remote) delete x.remote;
 	if (length(keys(x)) == 1) return;
 	fs.mkdir(cfg.run, 0700); fs.mkdir(cfg.run + '/inbox', 0700);
 	writeJson(cfg.run + '/inbox/checkin-' + r.now + '.json', x);
@@ -382,10 +403,10 @@ function inbox(r) {
 function checkin() {
 	const id = identity();
 	if (!id.registered) return null;
-	const last = readJson(F('last.json'), null);
+	const last = readJson(F('last.json'), null), m = readJson(cfg.etc + '/member.json', null);
 	const sets = readJson(cfg.etc + '/sets.json', null)?.sets;
 	const r = post('checkin', { version: installed(), updater: VERSION, lastUpgrade: last && !last.sent ? { 'from': last.prev, to: last.to, result: last.result, reason: last.reason, at: last.at } : null,
-		claimed: claimed(), kidNets: kidNets(), haveCurrent: haveCurrent(), ...(type(sets) == 'string' ? { sets } : {}) });
+		claimed: claimed(), kidNets: kidNets(), memberUntil: m?.x ?? 0, haveCurrent: haveCurrent(), ...(type(sets) == 'string' ? { sets } : {}) });
 	if (r?.error == 'CLOCK') { clockFix(r.now); return null; }
 	if (r?.error == 'NOT_REGISTERED') { fs.mkdir(cfg.run, 0700); fs.writefile(cfg.run + '/unregistered.now', '' + now()); log('云端没有这台的记录，通知主程序重新登记'); return null; }
 	if (!r?.ok) return null;
@@ -413,12 +434,32 @@ function checkinAndAct() {
 }
 
 // 常驻进程
+// 看门狗：限速规则还在、管控程序的状态 10 分钟（按开机时长算，不怕校时跳变）没更新 → 卡住了：放开网络，再重启管控（一天最多 3 次，
+// 再卡就一直放开，等报到报上去、发新版本修）。记录放内存（/tmp/doti/watchdog.json），重启路由器就清零
+const WD_STALE = 600, WD_RESTARTS = 3;
+function watchdog() {
+	const f = cfg.run + '/watchdog.json', w = readJson(f, null) ?? {}, up = uptime(), m = mtime(cfg.run + '/status.json'), day = today(now());
+	if (w.day != day) { w.day = day; w.n = 0; }
+	if (!m || !rulesOn()) { w.m = m; w.since = up; writeJson(f, w); return; }
+	if (m != w.m) { w.m = m; w.since = up; writeJson(f, w); return; }
+	if (up - (w.since ?? up) < WD_STALE) { writeJson(f, w); return; }
+	failOpen();
+	log(sprintf('管控程序 %d 分钟没动静，已停管控、放开网络', int((up - w.since) / 60)));
+	if (w.n < WD_RESTARTS) { w.n++; mainStart(); log(sprintf('重启管控（今天第 %d 次）', w.n)); }
+	w.since = up;
+	writeJson(f, w);
+}
+
 function daemon() {
 	fs.mkdir(cfg.dir, 0700);
 	if (lock()) { finishPending(); unlock(); }
 	const ck = readJson(F('checkin.json'), null);
 	let fails = 0, retryAt = 0;
-	let catchUp = !ck?.at || now() - ck.at > 86400 ? now() + 300 + int(rnd() * 1500) : 0;
+	// 开机补报：一天没报到过；或者刚开机（开机 15 分钟内）、又不在服务期内——服务期外不连门铃，
+	// 家长不在家续了费，断电重开路由器也能让它 5–30 分钟内取到新凭证
+	const up = fs.readfile(getenv('DOTI_UPTIME') || '/proc/uptime'), boot = up != null && +split(up, ' ')[0] < 900;
+	const svc = readJson(cfg.etc + '/remote.json', null)?.on === true && (readJson(cfg.etc + '/member.json', null)?.x ?? 0) > now();
+	let catchUp = !ck?.at || now() - ck.at > 86400 || (boot && !svc) ? now() + 300 + int(rnd() * 1500) : 0;
 	if (getenv('DOTI_UPD_ONCE')) catchUp = catchUp ? now() : 0;
 	while (true) {
 		const t = now(), id = identity(), lt = localtime(t), sec = lt.hour * 3600 + lt.min * 60 + lt.sec;
@@ -441,6 +482,7 @@ function daemon() {
 				unlock();
 			}
 		}
+		if (!fs.stat(cfg.tmp + '/doti-updater.lock')) watchdog();   // 升级、回滚时不看（那时本来就停着）
 		if (getenv('DOTI_UPD_ONCE')) break;
 		sleep(60000);
 	}

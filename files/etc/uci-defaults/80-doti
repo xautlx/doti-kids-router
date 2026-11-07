@@ -86,7 +86,7 @@ for i in 1 2 3; do
 	rule dns 'tcp udp' 53
 	rule hello tcp 8899
 	rule admin tcp 8900
-	rule dnsbl 'tcp udp' 5390
+	rule dnsbl 'tcp udp' 5390-5392
 	PASS=$(randpw)
 	for radio in $(radios); do
 		s=${n}_$radio

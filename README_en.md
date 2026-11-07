@@ -19,6 +19,14 @@ The overview, requirements, install and pairing steps, and how to verify the pac
 
 Packages are in [Releases](../../releases) (also mirrored to the gitee repository of the same name).
 
+## Cloud and remote management
+
+The router connects to the Doti cloud to register, back up the parent list and settings (for restoring onto a new router), invite family members, and receive online upgrades.
+
+Remote management is an optional paid service: parents can check status, grant extra time and change rules from the mini program while away from home. A service period is included after binding; when it ends without renewal, only remote operations stop, and managing at home stays free. The router-side sync code for remote management is in this repository too; whether remote operations are allowed is decided by the cloud based on the service period, so publishing the code does not give the service away.
+
+Browsing records stay on the router and are never uploaded. WiFi passwords are not stored in the cloud either: when a password is changed remotely, the cloud only relays it and deletes it once the router has it.
+
 ## Build it yourself
 
 ```sh
@@ -40,3 +48,5 @@ Builds are reproducible: the same source produces the same file anywhere, which 
 ## License
 
 [GPL-3.0](LICENSE).
+
+The adult and gambling domains in the always-on blocklist (`blocklist/always.txt`) come from [StevenBlack/hosts](https://github.com/StevenBlack/hosts) (MIT).

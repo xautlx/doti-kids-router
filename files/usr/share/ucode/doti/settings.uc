@@ -4,7 +4,8 @@
 export const SURF = [0, 15, 30, 45, 60, 75, 90, 120, 240, 1440];
 export const LIMIT = [15, 30, 45, 60, 75, 90, 120, 240, 1440];
 export const DAILY = [0, 30, 60, 90, 120, 180, 240, 480, 720, 960];
-export const CATEGORIES = ['game', 'shortvideo', 'video'];
+export const CATEGORIES = ['game', 'shortvideo', 'film'];   // 游戏、短视频和直播、影视
+const NET_KEYS = ['k1', 'k2', 'k3'];
 export const DEFAULT_NAMES = { k1: '大宝的网络', k2: '二宝的网络', k3: '三娃的网络' };
 export function defaultRouterName(code) { return '一点守护路由器 ' + (code || ''); };
 const MAX_WIN = 8, MAX_CUSTOM = 200;
@@ -42,7 +43,7 @@ export function fromTemplate(tpl, key, name, ver) {
 
 export function defaults(keys, code) {
 	return { globalVer: 1, routerName: defaultRouterName(code),
-		block: { categories: [], custom: [], paused: [], shareCustom: true },
+		block: { categories: [], except: {}, custom: [], paused: [], shareCustom: true },
 		networks: map(keys, k => fromTemplate('lower', k)) };
 };
 
@@ -132,12 +133,22 @@ function checkBlock(b, old) {
 		if (c && !inList(c, custom)) push(custom, c);
 	}
 	if (length(custom) > MAX_CUSTOM) return [null, 'block.custom'];
+	// 某个分类不挡哪几个孩子网络（UI-KID-09e）：只对开着的分类记，空的不记
+	if (b.except != null && type(b.except) != 'object') return [null, 'block.except'];
+	const except = {};
+	for (let c, ks in (b.except ?? {})) {
+		if (!inList(c, CATEGORIES) || type(ks) != 'array') return [null, 'block.except'];
+		if (!inList(c, cats)) continue;
+		const out = [];
+		for (let k in ks) if (inList(k, NET_KEYS) && !inList(k, out)) push(out, k);
+		if (length(out)) except[c] = out;
+	}
 	const paused = [];
 	for (let d in (b.paused ?? [])) {
 		const c = cleanDomain(d);
 		if (c && inList(c, custom) && !inList(c, paused)) push(paused, c);
 	}
-	return [{ categories: cats, custom, paused, shareCustom: b.shareCustom ?? old?.shareCustom ?? true }, null];
+	return [{ categories: cats, except, custom, paused, shareCustom: b.shareCustom ?? old?.shareCustom ?? true }, null];
 }
 
 // 旧路由器的名字还是默认的「一点守护路由器 <编号>」：编号换了，不带过来
