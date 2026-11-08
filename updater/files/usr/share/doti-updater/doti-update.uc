@@ -3,7 +3,7 @@
 'use strict';
 import * as fs from 'fs';
 
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 const PKG = 'doti-kids-router', UPKG = 'doti-kids-router-updater';
 const cfg = {
 	dir: getenv('DOTI_UPD_DIR') || '/etc/doti-updater',
@@ -22,6 +22,7 @@ const cfg = {
 	initd: getenv('DOTI_INITD') || '/etc/init.d/doti',
 	nft: getenv('DOTI_NFT') || 'nft',
 	overlay: getenv('DOTI_OVERLAY') || '/overlay',
+	sys: getenv('DOTI_SYSROOT') || '',
 	wait: +(getenv('DOTI_UPD_WAIT') || 600),
 	step: +(getenv('DOTI_UPD_STEP') || 5000)
 };
@@ -411,13 +412,37 @@ function inbox(r) {
 	fs.writefile(cfg.run + '/gen.tmp', '' + g); fs.rename(cfg.run + '/gen.tmp', cfg.run + '/gen');
 }
 
+// 报到带的环境信息（给统计分析：系统版本和平台、存储内存、开机时长、无线频段数、家里各类设备数量）；取不到的项不带
+function envInfo() {
+	const e = {}, r = fs.readfile(cfg.sys + '/etc/openwrt_release') ?? '', K = { RELEASE: 'os', REVISION: 'rev', TARGET: 'target', ARCH: 'arch' };
+	for (let k in K) {
+		const m = match(r, regexp("DISTRIB_" + k + "='([^']*)'"));
+		if (m) e[K[k]] = substr(m[1], 0, 40);
+	}
+	const board = trim(fs.readfile(cfg.sys + '/tmp/sysinfo/board_name') ?? ''), model = trim(fs.readfile(cfg.sys + '/tmp/sysinfo/model') ?? '');
+	if (board) e.board = substr(board, 0, 64);
+	if (model) e.model = substr(model, 0, 64);
+	e.pm = pm();
+	const df = match(sh('df -k ' + shq(cfg.overlay) + ' 2>/dev/null | tail -1'), /[ \t]([0-9]+)[ \t]+[0-9]+[ \t]+([0-9]+)[ \t]+[0-9]+%/);
+	if (df) { e.flashKB = +df[1]; e.flashFreeKB = +df[2]; }
+	const mi = fs.readfile(cfg.sys + '/proc/meminfo') ?? '', mt = match(mi, /MemTotal:[ \t]+([0-9]+)/), ma = match(mi, /MemAvailable:[ \t]+([0-9]+)/);
+	if (mt) e.memKB = +mt[1];
+	if (ma) e.memFreeKB = +ma[1];
+	const up = fs.readfile(getenv('DOTI_UPTIME') || '/proc/uptime');
+	if (up != null) e.uptime = int(+split(up, ' ')[0]);
+	const ph = fs.lsdir(cfg.sys + '/sys/class/ieee80211');
+	if (ph) e.radios = length(ph);
+	const devs = readJson(cfg.etc + '/baseline.json', null)?.devs;
+	if (type(devs) == 'object') { const n = {}; for (let mac in devs) { const t = devs[mac]?.type ?? 'other'; n[t] = (n[t] ?? 0) + 1; } e.devs = n; }
+	return e;
+}
 function checkin() {
 	const id = identity();
 	if (!id.registered) return null;
 	const last = readJson(F('last.json'), null), m = readJson(cfg.etc + '/member.json', null);
 	const sets = readJson(cfg.etc + '/sets.json', null)?.sets;
 	const r = post('checkin', { version: installed(), updater: VERSION, lastUpgrade: last && !last.sent ? { 'from': last.prev, to: last.to, result: last.result, reason: last.reason, at: last.at } : null,
-		claimed: claimed(), kidNets: kidNets(), memberUntil: m?.x ?? 0, haveCurrent: haveCurrent(), ...(type(sets) == 'string' ? { sets } : {}) });
+		claimed: claimed(), kidNets: kidNets(), memberUntil: m?.x ?? 0, haveCurrent: haveCurrent(), env: envInfo(), ...(type(sets) == 'string' ? { sets } : {}) });
 	if (r?.error == 'CLOCK') { clockFix(r.now); return null; }
 	if (r?.error == 'NOT_REGISTERED') { fs.mkdir(cfg.run, 0700); fs.writefile(cfg.run + '/unregistered.now', '' + now()); log('云端没有这台的记录，通知主程序重新登记'); return null; }
 	if (!r?.ok) return null;

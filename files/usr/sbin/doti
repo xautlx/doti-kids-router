@@ -19,7 +19,7 @@ import { hmacSha256, sha256 } from 'doti.hmac';
 import { emptyList, indexOf as listIndex, isParent, join as listJoin, remove as listRemove, setProfile, sign, verify } from 'doti.auth';
 import { backoff, post as cloudPost, url as cloudUrl } from 'doti.cloud';
 
-const VERSION = '1.2.0';
+const VERSION = '1.2.1';
 const CLOCK_FIX = 120;
 const TREND_N = 60, TICK = 10, DT_MAX = 120, REAPPLY = 600, BASE_SAVE = 3600, WANT_ON = 3, WANT_OFF = 6, SEG_JITTER = 90, CONFIRM_TICKS = 3, LIMIT_KBPS = 100;   // LIMIT_KBPS：设置里没带限速时网速时的默认
 const cfg = {
