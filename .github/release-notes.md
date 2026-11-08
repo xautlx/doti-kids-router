@@ -1,6 +1,6 @@
 ## 一点守护路由器 v{VER}
 
-安装方法、系统要求、绑定步骤、核对安装包，请看 **Quick Start**：[doti.entdiy.xyz/quick-start](https://doti.entdiy.xyz/quick-start/)（国内访问更快）· [GitHub Pages](https://xautlx.github.io/doti-kids-router/quick-start/)
+安装方法、系统要求、绑定步骤、核对安装包，请看 **快速开始**：[doti.entdiy.xyz/quick-start](https://doti.entdiy.xyz/quick-start/)（国内访问更快）· [GitHub Pages](https://xautlx.github.io/doti-kids-router/quick-start/)
 
 | 文件 | 用途 |
 |---|---|

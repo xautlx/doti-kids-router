@@ -10,12 +10,12 @@
 
 ## 了解和安装
 
-产品介绍、系统要求、安装和绑定步骤、核对安装包，都在项目主页和 Quick Start 里：
+产品介绍、系统要求、安装和绑定步骤、核对安装包，都在项目主页和 快速开始 里：
 
 | | 国内访问更快 | GitHub Pages |
 |---|---|---|
 | 项目主页 | [doti.entdiy.xyz](https://doti.entdiy.xyz/) | [xautlx.github.io/doti-kids-router](https://xautlx.github.io/doti-kids-router/) |
-| Quick Start | [doti.entdiy.xyz/quick-start](https://doti.entdiy.xyz/quick-start/) | [xautlx.github.io/doti-kids-router/quick-start](https://xautlx.github.io/doti-kids-router/quick-start/) |
+| 快速开始 | [doti.entdiy.xyz/quick-start](https://doti.entdiy.xyz/quick-start/) | [xautlx.github.io/doti-kids-router/quick-start](https://xautlx.github.io/doti-kids-router/quick-start/) |
 
 安装包在 [Releases](../../releases)（国内也可以到 gitee 同名仓库的发行版下载）。
 
