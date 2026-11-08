@@ -1,0 +1,48 @@
+# 一点守护 · 可选分类：短视频和直播（家长打开才屏蔽，默认关；有几个孩子网络时可以只挡其中几个）。
+# 一行一个域名（同时屏蔽所有子域名），# 后面是注释。
+# 字节、腾讯、阿里、百度等公司的通用域名（bytedance.com、snssdk.com、pstatp.com、byteimg.com、qq.com、gtimg.com、qpic.cn、
+# alicdn.com、baidu.com 等）会连带豆包、飞书、今日头条、微信、支付、搜索，一律不收，只收各平台专用的域名。
+# 按平台主业归类：主业是刷短视频、直播的进这里，看剧看电影的进「影视」；影视 App 里夹带的短视频专区和影视同一批域名，挡不了。
+
+# 抖音
+douyin.com
+iesdouyin.com
+amemv.com
+douyinvod.com
+douyinpic.com
+douyincdn.com
+douyinstatic.com
+huoshan.com       # 抖音火山版
+ixigua.com        # 西瓜视频
+
+# 快手
+kuaishou.com
+gifshow.com
+kwaicdn.com
+kwimgs.com
+yximgs.com
+
+# 其他短视频（不收 qq.com、baidu.com）
+weishi.qq.com     # 微视
+haokan.baidu.com  # 好看视频
+
+# 哔哩哔哩、AcFun（两头都占，孩子主要是在上面刷）
+bilibili.com
+bilivideo.com
+hdslb.com
+acfun.cn
+
+# 直播
+huya.com
+douyu.com
+douyucdn.cn
+yy.com
+huajiao.com
+inke.cn
+
+# 境外（多数家庭直连不了，开了 VPN 时有用）
+tiktok.com
+tiktokv.com
+youtube.com
+googlevideo.com
+ytimg.com

@@ -1,0 +1,82 @@
+# 一点守护 · 可选分类：游戏（家长打开才屏蔽，默认关）。一行一个域名（同时屏蔽所有子域名），# 后面是注释。
+# 只收游戏专用的域名；腾讯、网易、字节、阿里、百度等公司的通用域名（qq.com、gtimg.com、163.com、netease.com、bytedance.com 等）
+# 会连带微信、QQ、邮箱、支付、学习 App，一律不收，只收它们下面确认是游戏的子域名。
+# 很多手游 App 自己解析域名、不走路由器 DNS，对已装好的 App 效果有限。
+
+# 网页小游戏、游戏资讯
+4399.com
+7k7k.com
+3366.com
+2144.cn
+37.com
+9377.com
+17173.com
+gamersky.com      # 游民星空
+ali213.net        # 游侠网
+game.hao123.com
+uu.cc             # 乐逗游戏
+
+# 游戏平台、下载和社区
+taptap.cn
+taptap.com
+xd.com            # 心动网络（TapTap、香肠派对）
+3839.com          # 好游快爆
+biligame.com      # B 站游戏
+game.bilibili.com # B 站游戏中心（只开游戏、不开视频时也要挡）
+steampowered.com
+steamcommunity.com
+steamcontent.com
+steamstatic.com
+steamusercontent.com
+steamchina.com    # 蒸汽平台（Steam 国服）
+battle.net        # 暴雪战网
+battlenet.com.cn
+blizzard.com
+blizzard.cn
+
+# 腾讯游戏（只收游戏子域名，不收 qq.com）
+pvp.qq.com        # 王者荣耀
+gp.qq.com         # 和平精英
+lol.qq.com        # 英雄联盟
+lolm.qq.com       # 英雄联盟手游
+cf.qq.com         # 穿越火线
+cfm.qq.com        # 穿越火线手游
+dnf.qq.com        # 地下城与勇士
+codm.qq.com       # 使命召唤手游
+nz.qq.com         # 逆战
+speed.qq.com      # QQ 飞车
+ymzx.qq.com       # 元梦之星
+huanle.qq.com     # 欢乐斗地主等
+game.weixin.qq.com # 微信游戏中心、小游戏
+
+# 网易游戏（只收游戏子域名，不收 163.com、netease.com）
+game.163.com
+party.163.com     # 蛋仔派对
+mc.163.com        # 我的世界中国版
+nie.netease.com   # 网易游戏官网和游戏服务（第五人格、光遇、梦幻西游、哈利波特等）
+g66.update.netease.com  # 明日之后更新
+h55.update.netease.com  # 第五人格更新
+ma75.update.netease.com # 光遇更新
+
+# 米哈游
+mihoyo.com        # 原神、崩坏：星穹铁道、崩坏 3、绝区零国服
+miyoushe.com      # 米游社
+yuanshen.com
+hoyoverse.com
+hoyolab.com
+
+# 其他游戏公司
+hypergryph.com    # 鹰角（明日方舟）
+papegames.cn      # 叠纸（恋与深空、闪耀暖暖）
+lilithgames.com   # 莉莉丝（剑与远征、万国觉醒）
+kurogame.com      # 库洛（鸣潮、战双帕弥什）
+seasun.com        # 西山居（剑网 3）
+xoyo.com          # 西山居账号平台
+pwrd.com          # 完美世界游戏
+happyelements.com # 乐元素（开心消消乐）
+happyelements.cn
+roblox.com
+roblox.cn         # Roblox 国服
+rbxcdn.com        # Roblox 资源
+minecraft.net     # 我的世界国际版
+mojang.com

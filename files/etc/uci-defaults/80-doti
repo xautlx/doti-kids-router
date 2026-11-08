@@ -1,0 +1,183 @@
+#!/bin/sh
+# 一点守护安装初始化
+ETC=/etc/doti
+mkdir -p "$ETC"
+log() { logger -t doti "$*"; echo "[doti] $*"; }
+
+# 1 时区
+if [ "$(uci -q get system.@system[0].zonename)" = "UTC" ] || [ -z "$(uci -q get system.@system[0].zonename)" ]; then
+	uci set system.@system[0].zonename='Asia/Shanghai'
+	uci set system.@system[0].timezone='CST-8'
+	uci commit system
+	log "时区设为北京时间"
+fi
+[ "$(cat /tmp/TZ 2>/dev/null)" = "$(uci -q get system.@system[0].timezone)" ] || /etc/init.d/system reload
+
+# 2 身份和编号
+CODE=$(/usr/sbin/doti init)
+[ -n "$CODE" ] || { log "生成身份失败"; exit 1; }
+
+# 802.11k
+HAPD=$(readlink -f /usr/sbin/hostapd 2>/dev/null)
+has() { grep -qs "$1" /lib/netifd/hostapd.sh && [ -n "$HAPD" ] && grep -qs "$1" "$HAPD"; }
+roam() { has rrm_neighbor_report && uci set wireless.$1.ieee80211k=1; }
+randpw() { tr -dc 0-9 < /dev/urandom 2>/dev/null | head -c 8; }
+radios() { uci show wireless | sed -nE "s/^wireless\.([^.=]+)=wifi-device$/\1/p"; }
+
+# 3 国家码
+CC=""; RADIO_ON=0
+for radio in $(radios); do
+	[ "$(uci -q get wireless.$radio.disabled)" = "1" ] && continue
+	RADIO_ON=1
+	[ -n "$CC" ] || CC=$(uci -q get wireless.$radio.country)
+done
+[ $RADIO_ON = 1 ] || CC=CN
+EXIST=$(uci -q get network.doti1.ipaddr)
+case "$EXIST" in 10.*.1.1) F=$(echo "$EXIST" | cut -d. -f2) ;; *) F=$(/usr/sbin/doti-subnet pick) ;; esac
+if [ -f "$ETC/preinstall" ] && [ "$(uci -q get network.lan.ipaddr)" != "10.$F.0.1" ]; then
+	uci set network.lan.ipaddr=10.$F.0.1
+	uci set network.lan.netmask=255.255.255.0
+	log "预装模式：主 LAN 设为 10.$F.0.1"
+fi
+
+# 4 主 LAN 上正在广播的热点
+noenc() { case "$(uci -q get wireless.$1.encryption)" in none|"") true ;; *) false ;; esac; }
+OPEN=""
+for d in $(uci show wireless | sed -nE "s/^wireless\.([^.=]+)\.network='?lan'?$/\1/p"); do
+	[ "$(uci -q get wireless.$d.mode)" = "ap" ] && [ "$(uci -q get wireless.$d.disabled)" != "1" ] || continue
+	[ "$(uci -q get wireless.$(uci -q get wireless.$d.device).disabled)" = "1" ] && continue
+	noenc $d && OPEN="$OPEN $d"
+done
+
+# 5、6 孩子网络、防火墙、热点
+NJSON="["
+for i in 1 2 3; do
+	n=doti$i; br=br-doti$i
+	ip=$(uci -q get network.$n.ipaddr)
+	if [ -z "$ip" ]; then
+		ip="10.$F.$i.1"
+		uci set network.${n}_dev=device
+		uci set network.${n}_dev.name="$br"
+		uci set network.${n}_dev.type=bridge
+		uci set network.${n}_dev.bridge_empty=1
+		uci set network.$n=interface
+		uci set network.$n.proto=static
+		uci set network.$n.device="$br"
+		uci set network.$n.ipaddr="$ip"
+		uci set network.$n.netmask=255.255.255.0
+		uci set dhcp.$n=dhcp
+		uci set dhcp.$n.interface=$n
+		uci set dhcp.$n.start=100
+		uci set dhcp.$n.limit=150
+		uci set dhcp.$n.leasetime=12h
+		log "建孩子网络 $n（$ip）"
+	fi
+	uci set firewall.${n}_zone=zone
+	uci set firewall.${n}_zone.name=$n
+	uci set firewall.${n}_zone.network=$n
+	uci set firewall.${n}_zone.input=REJECT
+	uci set firewall.${n}_zone.output=ACCEPT
+	uci set firewall.${n}_zone.forward=REJECT
+	uci set firewall.${n}_fwd=forwarding
+	uci set firewall.${n}_fwd.src=$n
+	uci set firewall.${n}_fwd.dest=wan
+	rule() { uci set firewall.${n}_$1=rule; uci set firewall.${n}_$1.name="DOTI-$n-$1"; uci set firewall.${n}_$1.src=$n; uci set firewall.${n}_$1.proto="$2"; uci set firewall.${n}_$1.dest_port=$3; uci set firewall.${n}_$1.target=ACCEPT; }
+	rule dhcp udp 67-68
+	rule dns 'tcp udp' 53
+	rule hello tcp 8899
+	rule admin tcp 8900
+	rule dnsbl 'tcp udp' 5390-5392
+	PASS=$(randpw)
+	for radio in $(radios); do
+		s=${n}_$radio
+		if [ -n "$(uci -q get wireless.$s)" ]; then roam $s; continue; fi
+		uci set wireless.$s=wifi-iface
+		uci set wireless.$s.device=$radio
+		uci set wireless.$s.mode=ap
+		uci set wireless.$s.ssid="DOTI-$CODE-0$i"
+		uci set wireless.$s.encryption=psk2
+		uci set wireless.$s.key="$PASS"
+		uci set wireless.$s.network=$n
+		uci set wireless.$s.disabled=1
+		roam $s
+		if [ "$(uci -q get wireless.$radio.disabled)" = "1" ]; then
+			uci -q delete wireless.$radio.disabled
+			[ -n "$CC" ] && ! uci -q get wireless.$radio.country >/dev/null && uci set wireless.$radio.country=$CC
+			for d in $(uci show wireless | sed -nE "s/^wireless\.([^.=]+)\.device='$radio'$/\1/p"); do
+				[ "$d" != "$s" ] && noenc $d && uci set wireless.$d.disabled=1
+			done
+		fi
+		log "建 WiFi DOTI-$CODE-0$i（$radio）"
+	done
+	NJSON="$NJSON{\"key\":\"k$i\",\"net\":\"$n\",\"dev\":\"$br\",\"ip\":\"$ip\"}"
+	[ $i -lt 3 ] && NJSON="$NJSON,"
+done
+printf '%s]\n' "$NJSON" > "$ETC/nets.json"
+
+# 7 家长 WiFi
+if [ ! -f "$ETC/admin-wifi" ]; then
+	ASSID="DOTI-TEMP-ADMIN"
+	for d in $OPEN; do uci set wireless.$d.ssid="$ASSID"; log "家长 WiFi $ASSID（原 WiFi 没密码，改名）"; done
+	for radio in $(radios); do
+		[ "$(uci -q get wireless.$radio.disabled)" = "1" ] && continue
+		HAS=""
+		for d in $OPEN; do [ "$(uci -q get wireless.$d.device)" = "$radio" ] && HAS=1; done
+		[ -n "$HAS" ] && continue
+		s=doti0_$radio
+		uci set wireless.$s=wifi-iface
+		uci set wireless.$s.device=$radio
+		uci set wireless.$s.mode=ap
+		uci set wireless.$s.network=lan
+		uci set wireless.$s.ssid="$ASSID"
+		uci set wireless.$s.encryption=none
+		log "建家长 WiFi $ASSID（$radio）"
+	done
+	touch "$ETC/admin-wifi"
+fi
+
+# 8 uhttpd 两个实例
+uci -q delete uhttpd.doti
+uci set uhttpd.doti_pub=uhttpd
+uci -q delete uhttpd.doti_pub.listen_http
+uci add_list uhttpd.doti_pub.listen_http='0.0.0.0:8899'
+uci set uhttpd.doti_admin=uhttpd
+uci -q delete uhttpd.doti_admin.listen_http
+uci add_list uhttpd.doti_admin.listen_http='0.0.0.0:8900'
+for x in doti_pub doti_admin; do
+	uci set uhttpd.$x.cgi_prefix=/doti
+	uci set uhttpd.$x.no_dirlists=1
+	uci set uhttpd.$x.rfc1918_filter=1
+	uci set uhttpd.$x.max_requests=3
+done
+uci set uhttpd.doti_pub.home=/www-doti/pub
+uci set uhttpd.doti_pub.script_timeout=10
+uci set uhttpd.doti_pub.network_timeout=10
+uci set uhttpd.doti_admin.home=/www-doti/admin
+uci set uhttpd.doti_admin.script_timeout=15
+uci set uhttpd.doti_admin.network_timeout=15
+
+# 9 流量卸载会绕过计数和限速
+if [ "$(uci -q get firewall.@defaults[0].flow_offloading)" = "1" ]; then
+	uci set firewall.@defaults[0].flow_offloading=0
+	uci -q delete firewall.@defaults[0].flow_offloading_hw
+	log "关闭流量卸载（否则限速和计数不生效）"
+fi
+
+uci commit network; uci commit dhcp; uci commit firewall; uci commit wireless; uci commit uhttpd
+
+# 认领限时从安装这一刻算 1 小时
+mkdir -p /tmp/doti && cut -d. -f1 /proc/uptime > /tmp/doti/claim-from
+
+# 11 后台生效
+(
+	sleep 3
+	/etc/init.d/network reload
+	wifi reload
+	/etc/init.d/dnsmasq reload
+	/etc/init.d/firewall reload
+	/etc/init.d/uhttpd restart
+	/etc/init.d/doti enable
+	/etc/init.d/doti restart
+	log "安装完成，编号 $CODE"
+) >/dev/null 2>&1 &
+exit 0

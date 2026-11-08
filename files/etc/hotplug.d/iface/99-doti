@@ -1,0 +1,6 @@
+# 网口起来时：检查网段冲突；LAN 起来后重启服务
+[ "$ACTION" = ifup ] || exit 0
+case "$INTERFACE" in
+wan) /usr/sbin/doti-subnet check ;;
+lan) /etc/init.d/doti restart ;;
+esac

@@ -1,0 +1,4 @@
+# NTP 同步后记下时钟已校准
+[ "$ACTION" = stratum ] && [ "$stratum" != 16 ] || exit 0
+mkdir -p /tmp/doti
+printf '{"src":"ntp","at":%s}' "$(date +%s)" > /tmp/doti/clock

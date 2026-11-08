@@ -1,0 +1,96 @@
+#!/usr/bin/ucode -S
+// 用网判定标定工具
+//   doti-calib start [间隔秒]   建计数表 inet doti_calib，后台开始记录（默认 10 秒一行）
+//   doti-calib mark <标签>      打场景标记（如 phone:idle），之后的记录都带这个标签
+//   doti-calib stop             停止记录，删掉计数表
+//   doti-calib status           是否在记录、行数、当前标签
+//   doti-calib run              （内部）记录循环
+'use strict';
+import * as fs from 'fs';
+import { features, parseConntrack, parseLeases, parseSets, parseStations, prefixes, ruleset } from 'doti.calib';
+
+const ETC = getenv('DOTI_ETC') || '/etc/doti', RUN = getenv('DOTI_RUN') || '/tmp/doti';
+const NFT = getenv('DOTI_NFT') || 'nft';
+const CONNTRACK = getenv('DOTI_CONNTRACK') || '/proc/net/nf_conntrack';
+const LEASES = getenv('DOTI_LEASES') || '/tmp/dhcp.leases';
+const IW = getenv('DOTI_IW') || 'iw';
+const OUT = RUN + '/calib.jsonl', PID = RUN + '/calib.pid', MARK = RUN + '/calib.mark', OFF = RUN + '/calib.off', CONF = RUN + '/calib.conf';
+const MAX_BYTES = 8 * 1024 * 1024;
+
+function sh(cmd) { const p = fs.popen(cmd, 'r'); if (!p) return ''; const s = p.read('all'); p.close(); return s ?? ''; }
+function readJSON(f, d) { const s = fs.readfile(f); if (s == null) return d; try { return json(s); } catch (e) { return d; } }
+function mono() { const u = fs.readfile('/proc/uptime'); return u ? +split(u, ' ')[0] : time(); }
+function groups() { return readJSON(ETC + '/nets.json', []); }
+
+function snapshot(gs, pfx) {
+	const sta = {};
+	for (let ifc in split(trim(sh(IW + " dev 2>/dev/null | awk '/Interface/{print $2}'")), '\n'))
+		if (ifc) for (let mac, s in parseStations(sh(sprintf("%s dev %s station dump 2>/dev/null", IW, ifc)))) sta[mac] = s;
+	return {
+		sets: parseSets(sh(NFT + ' -j list table inet doti_calib 2>/dev/null'), gs),
+		ct: parseConntrack(fs.readfile(CONNTRACK), pfx),
+		sta, leases: parseLeases(fs.readfile(LEASES)), ready: true,
+	};
+}
+
+function run() {
+	const gs = groups(), pfx = prefixes(gs);
+	const every = +(fs.readfile(CONF) ?? 10) || 10;
+	let prev = { sets: {}, ct: {}, sta: {}, leases: {}, ready: false }, last = mono();
+	const state = { seen: {} };
+	prev = snapshot(gs, pfx);
+	while (!fs.stat(OFF)) {
+		sleep(every * 1000);
+		const st = fs.stat(OUT);
+		if (st && st.size > MAX_BYTES) break;
+		const cur = snapshot(gs, pfx), m = mono(), dt = max(1, m - last);
+		last = m;
+		const dev = features(prev, cur, dt, int(m), state);
+		prev = cur;
+		const h = fs.open(OUT, 'a');
+		h.write(sprintf('%J\n', { ts: time(), mark: trim(fs.readfile(MARK) ?? ''), dt: int(dt * 10) / 10, dev }));
+		h.close();
+	}
+	fs.unlink(PID);
+}
+
+function running() { const p = trim(fs.readfile(PID) ?? ''); return p != '' && fs.stat('/proc/' + p) != null; }
+
+function start() {
+	if (running()) { print('已经在记录了\n'); return 0; }
+	fs.mkdir(RUN, 0700);
+	const gs = groups();
+	if (!length(gs)) { warn('没有孩子网络（/etc/doti/nets.json）\n'); return 1; }
+	fs.writefile(RUN + '/calib.nft', ruleset(gs));
+	if (system(sprintf('%s -f %s/calib.nft', NFT, RUN)) != 0) { warn('计数表下发失败\n'); return 1; }
+	fs.unlink(OFF);
+	fs.writefile(CONF, '' + (+(ARGV[1] ?? 10) || 10));
+	if (!fs.stat(MARK)) fs.writefile(MARK, '');
+	system(sprintf('(/usr/sbin/doti-calib run >/dev/null 2>&1 & echo $! > %s)', PID));
+	print('开始记录：' + OUT + '\n');
+	return 0;
+}
+
+function stop() {
+	fs.writefile(OFF, '1');
+	const p = trim(fs.readfile(PID) ?? '');
+	if (p) system('kill ' + p + ' 2>/dev/null');
+	fs.unlink(PID);
+	system(NFT + ' delete table inet doti_calib 2>/dev/null');
+	print('已停止\n');
+	return 0;
+}
+
+function status() {
+	const lines = length(split(trim(fs.readfile(OUT) ?? ''), '\n'));
+	print(sprintf('%J\n', { running: running(), lines: fs.stat(OUT) ? lines : 0, bytes: fs.stat(OUT)?.size ?? 0, mark: trim(fs.readfile(MARK) ?? '') }));
+	return 0;
+}
+
+const cmd = ARGV[0];
+if (cmd == 'start') exit(start());
+else if (cmd == 'stop') exit(stop());
+else if (cmd == 'run') exit(run() ?? 0);
+else if (cmd == 'status') exit(status());
+else if (cmd == 'mark') { fs.mkdir(RUN, 0700); fs.writefile(MARK, ARGV[1] ?? ''); print('标记：' + (ARGV[1] ?? '（清空）') + '\n'); exit(0); }
+else { warn('用法：doti-calib start [间隔秒] | mark <标签> | stop | status\n'); exit(2); }

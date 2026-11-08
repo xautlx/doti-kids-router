@@ -1,0 +1,35 @@
+#!/bin/sh
+# 一点守护升级程序启动器
+D=${DOTI_UPD_DIR:-/etc/doti-updater}
+FACTORY=${DOTI_UPD_SHARE:-/usr/share/doti-updater}/doti-update.uc
+UC=${DOTI_UCODE:-ucode}
+
+pick() {
+	a=$(cat "$D/active" 2>/dev/null)
+	if [ -n "$a" ] && [ -f "$D/slot-$a/doti-update.uc" ]; then echo "$D/slot-$a/doti-update.uc"; else echo "$FACTORY"; fi
+}
+
+[ "$1" = daemon ] || exec $UC -S "$(pick)" "$@"
+
+f=$(pick)
+t0=$(date +%s)
+# 停服务时把 TERM 转给常驻进程
+$UC -S "$f" daemon &
+pid=$!
+trap 'kill -TERM $pid 2>/dev/null; wait $pid; exit 0' TERM INT
+wait $pid
+rc=$?
+if [ "$rc" -ne 0 ] && [ $(( $(date +%s) - t0 )) -lt 30 ] && [ "$f" != "$FACTORY" ]; then
+	n=$(( $(cat "$D/fails" 2>/dev/null || echo 0) + 1 ))
+	echo "$n" > "$D/fails"
+	if [ "$n" -ge 2 ]; then
+		a=$(cat "$D/active" 2>/dev/null); [ "$a" = a ] && o=b || o=a
+		if [ -f "$D/slot-$o/doti-update.uc" ] && [ "$(cat "$D/bad-slot" 2>/dev/null)" != "$o" ]; then echo "$o" > "$D/active"; echo "$a" > "$D/bad-slot"
+		else rm -f "$D/active"; fi
+		echo 0 > "$D/fails"
+		logger -t doti-update "副本 $a 起不来，换用 $(cat "$D/active" 2>/dev/null || echo 出厂副本)"
+	fi
+else
+	echo 0 > "$D/fails" 2>/dev/null
+fi
+exit "$rc"

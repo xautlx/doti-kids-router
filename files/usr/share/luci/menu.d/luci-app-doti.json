@@ -1,0 +1,13 @@
+{
+	"admin/services/doti": {
+		"title": "一点守护",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "doti/status"
+		},
+		"depends": {
+			"acl": [ "luci-app-doti" ]
+		}
+	}
+}
