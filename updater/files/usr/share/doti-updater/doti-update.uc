@@ -3,8 +3,8 @@
 'use strict';
 import * as fs from 'fs';
 
-const VERSION = '1.1.0';
-const PKG = 'doti';
+const VERSION = '1.2.0';
+const PKG = 'doti-kids-router', UPKG = 'doti-kids-router-updater';
 const cfg = {
 	dir: getenv('DOTI_UPD_DIR') || '/etc/doti-updater',
 	share: getenv('DOTI_UPD_SHARE') || '/usr/share/doti-updater',
@@ -137,15 +137,26 @@ function ext() { return pm() == 'apk' ? 'apk' : 'ipk'; }
 // 这次要用的包：{ file, sha256, size }；apk 系统只认签名信息里的 apk 那组，没有就不升级
 function pkgOf(o) {
 	if (pm() == 'apk') return o.apk ? { file: o.apk.file ?? PKG + '-' + o.version + '-r1.apk', sha256: o.apk.sha256, size: o.apk.size } : null;
-	return { file: o.file ?? (o.pkg == 'doti-updater' ? 'doti-update_' + o.version + '.uc' : PKG + '_' + o.version + '-1_all.ipk'), sha256: o.sha256, size: o.size, urls: [ ...(o.urls ?? []), ...(o.url ? [ o.url ] : []) ] };
+	return { file: o.file ?? (o.pkg == UPKG ? UPKG + '_' + o.version + '.uc' : PKG + '_' + o.version + '-1_all.ipk'), sha256: o.sha256, size: o.size, urls: [ ...(o.urls ?? []), ...(o.url ? [ o.url ] : []) ] };
 }
 // 本地包：current 是装着的版本（回滚用），prev 是再上一个
 function cur() { return F('current.' + ext()); }
 function newFile() { return cfg.tmp + '/doti-new.' + ext(); }
 function keepNew(f, v) { fs.rename(cur(), F('prev.' + ext())); fs.writefile(cur(), fs.readfile(f)); writeJson(F('current.json'), { version: v }); }
-// apk 装本地包也会先下载全部软件源索引（官方源在国内要一两分钟），依赖系统都自带，先不联网装
+// apk 装本地包也会先下载全部软件源索引（官方源在国内要一两分钟），先不联网装，缺依赖再联网
+// opkg 装本地包要的依赖本机没有（新版本加了依赖，路由器上又没有软件源列表）会装不上：更新软件源列表再装，
+// 官方源在国内偶尔下载失败，最多再试两次
 function pkgInstall(f) {
-	if (pm() != 'apk') return system(sprintf('%s install --force-reinstall --force-downgrade %s >/dev/null 2>&1', cfg.opkg, shq(f))) == 0;
+	if (pm() != 'apk') {
+		const cmd = sprintf('%s install --force-reinstall --force-downgrade %s >/dev/null 2>&1', cfg.opkg, shq(f));
+		if (system(cmd) == 0) return true;
+		for (let i = 1; i <= 2; i++) {
+			log(sprintf('装不上（可能缺依赖），更新软件源列表后再装（第 %d 次）', i));
+			system(cfg.opkg + ' update >/dev/null 2>&1');
+			if (system(cmd) == 0) return true;
+		}
+		return false;
+	}
 	return system(sprintf('%s add --allow-untrusted --no-network %s >/dev/null 2>&1', cfg.apk, shq(f))) == 0 ||
 		system(sprintf('%s add --allow-untrusted %s >/dev/null 2>&1', cfg.apk, shq(f))) == 0;
 }
@@ -213,14 +224,14 @@ function sources(o, p) {
 	const out = [];
 	for (let u in p.urls ?? []) if (index(out, u) < 0) push(out, u);
 	const file = p.file;
-	const tag = o.tag ?? (o.pkg == 'doti-updater' ? null : 'v' + o.version);
+	const tag = o.tag ?? (o.pkg == UPKG ? null : 'v' + o.version);
 	if (tag) for (let m in MIRRORS) push(out, replace(replace(m, '{tag}', tag), '{file}', file));
 	return out;
 }
 // 逐个源下载，大小和 sha256 都对才算
 // 升级程序副本不分格式（p 不给时按 ipk 那组）
 function download(o, f, p) {
-	if (!p) p = { file: o.file ?? 'doti-update_' + o.version + '.uc', sha256: o.sha256, size: o.size, urls: [ ...(o.urls ?? []), ...(o.url ? [ o.url ] : []) ] };
+	if (!p) p = { file: o.file ?? UPKG + '_' + o.version + '.uc', sha256: o.sha256, size: o.size, urls: [ ...(o.urls ?? []), ...(o.url ? [ o.url ] : []) ] };
 	for (let u in sources(o, p)) {
 		fs.unlink(f);
 		system(sprintf('%s -q -T 60 -O %s %s >/dev/null 2>&1', cfg.fetch, shq(f), shq(u)));
@@ -366,7 +377,7 @@ function keepCurrent(c) {
 function slotDir(s) { return F('slot-' + s); }
 function selfUpdate(u) {
 	const o = signed(u);
-	if (!o || o.pkg != 'doti-updater' || o.version == VERSION) return false;
+	if (!o || o.pkg != UPKG || o.version == VERSION) return false;
 	const act = trim(fs.readfile(F('active')) ?? ''), other = act == 'a' ? 'b' : 'a';
 	fs.mkdir(slotDir(other), 0700);
 	const f = slotDir(other) + '/doti-update.uc';

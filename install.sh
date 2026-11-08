@@ -46,7 +46,7 @@ for i in 1 2 3; do
 done
 [ -n "$tag" ] || die "连不上一点守护的服务器，查不到最新版本。请检查路由器能不能上网，稍后再试"
 ver=${tag#v}
-if [ "$PM" = apk ]; then FILE="doti-$ver-r1.apk"; else FILE="doti_$ver-1_all.ipk"; fi
+if [ "$PM" = apk ]; then FILE="doti-kids-router-$ver-r1.apk"; else FILE="doti-kids-router_$ver-1_all.ipk"; fi
 say "最新版本：$ver（$FILE）"
 
 # 4 下载：几个下载源轮流试，大小对得上 SHA256SUMS 才算
@@ -72,7 +72,7 @@ done
 [ -n "$ok" ] || die "下载失败或文件校验不对，请稍后再试"
 
 # 5 安装：缺依赖就先更新软件源再装一次
-# apk 装本地包也会先下载全部软件源索引，官方源在国内要一两分钟；依赖官方系统都自带，先不联网装，
+# apk 装本地包也会先下载全部软件源索引，官方源在国内要一两分钟；除门铃组件外依赖官方系统都自带，先不联网装，
 # 缺依赖再联网，先试国内镜像（临时列表，只对这次安装生效，不改系统的软件源）
 MIRROR=https://mirrors.tuna.tsinghua.edu.cn/openwrt
 inst() {
@@ -83,6 +83,14 @@ inst() {
 	[ -s "$TMP/repos" ] && apk add --allow-untrusted --repositories-file "$TMP/repos" "$TMP/$FILE" && return 0
 	apk add --allow-untrusted "$TMP/$FILE"
 }
+# 1.2.0 以前的包叫 doti、doti-updater：先卸掉旧包再装（设置、绑定在 /etc/doti，不在包里，卸载不删）
+old=""
+if [ "$PM" = apk ]; then for p in doti-updater doti; do apk info -e "$p" >/dev/null 2>&1 && old="$old $p"; done
+else for p in doti-updater doti; do opkg status "$p" 2>/dev/null | grep -q '^Status:.* installed' && old="$old $p"; done; fi
+if [ -n "$old" ]; then
+	say "换成新的软件包名，先卸掉旧包（设置和绑定保留）：$old"
+	if [ "$PM" = apk ]; then apk del $old >/dev/null 2>&1; else opkg remove $old >/dev/null 2>&1; fi
+fi
 say "开始安装……"
 if ! inst; then
 	say "安装没成功，更新软件源后再试一次……"
@@ -92,5 +100,6 @@ if ! inst; then
 fi
 rm -rf "$TMP"
 say "✓ 安装完成（$ver）"
+if [ -n "$old" ]; then say "原来的设置和绑定都还在，照常使用即可。"; exit 0; fi
 say "1–2 分钟后会出现不用密码的 WiFi「DOTI-TEMP-ADMIN」，手机连上它，打开微信小程序「一点守护」按提示绑定。"
 say "这个 WiFi 只开 1 小时，超时后断电重开路由器会再开 1 小时。"

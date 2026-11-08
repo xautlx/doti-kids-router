@@ -29,16 +29,16 @@ jobs:
           v=$(sed -nE "s/^const VERSION = '([^']+)';.*/\1/p" files/usr/sbin/doti)
           [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "标签 ${GITHUB_REF_NAME} 和程序版本 $v 不一致"; exit 1; }
 
-      # Release 附件：ipk 和 apk 包、升级程序副本（在线升级时路由器按 tag 下载）、固定名 doti_all.ipk（首次安装的「最新版」地址）、
+      # Release 附件：ipk 和 apk 包、升级程序副本（在线升级时路由器按 tag 下载）、固定名 doti-kids-router_all.ipk / .apk（首次安装的「最新版」地址）、
       # SHA256SUMS（和在线升级签名里的 sha256 一致；安装脚本 install.sh 也按它校验）
       - name: Release files
         run: |
           uv=$(sed -nE "s/^const VERSION = '([^']+)';.*/\1/p" updater/files/usr/share/doti-updater/doti-update.uc)
           v=$(sed -nE "s/^const VERSION = '([^']+)';.*/\1/p" files/usr/sbin/doti)
-          cp updater/files/usr/share/doti-updater/doti-update.uc "dist/doti-update_$uv.uc"
-          cp dist/doti_*-1_all.ipk dist/doti_all.ipk
-          cp "dist/doti-$v-r1.apk" dist/doti_all.apk
-          (cd dist && sha256sum doti_*.ipk doti-updater_*.ipk doti_all.apk doti-*.apk doti-update_*.uc > SHA256SUMS && cat SHA256SUMS)
+          cp updater/files/usr/share/doti-updater/doti-update.uc "dist/doti-kids-router-updater_$uv.uc"
+          cp "dist/doti-kids-router_$v-1_all.ipk" dist/doti-kids-router_all.ipk
+          cp "dist/doti-kids-router-$v-r1.apk" dist/doti-kids-router_all.apk
+          (cd dist && sha256sum doti-kids-router* > SHA256SUMS && cat SHA256SUMS)
           sed -e "s/{VER}/$v/g" -e "s/{UVER}/$uv/g" .github/release-notes.md > release-notes.md
 
       - uses: actions/upload-artifact@v4

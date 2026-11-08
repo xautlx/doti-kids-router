@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""打包路由器端：先打升级程序 dist/doti-updater_<版本>-1_all.ipk，再打主程序 dist/doti_<版本>-1_all.ipk。
-加 --apk 再打 OpenWrt 25.x 用的 dist/doti-updater-<版本>-r1.apk、dist/doti-<版本>-r1.apk（要 apk-tools 3 的 apk mkpkg）。
+"""打包路由器端：先打升级程序 dist/doti-kids-router-updater_<版本>-1_all.ipk，再打主程序 dist/doti-kids-router_<版本>-1_all.ipk。
+加 --apk 再打 OpenWrt 25.x 用的 dist/doti-kids-router-updater-<版本>-r1.apk、dist/doti-kids-router-<版本>-r1.apk（要 apk-tools 3 的 apk mkpkg）。
 
 纯脚本包，不需要 OpenWrt SDK；版本号取自 files/usr/sbin/doti 的 VERSION。
 局域网接口的 /www-doti/{pub,admin}/doti/<接口> 是指向 /usr/libexec/doti/cgi 的符号链接，在这里生成。
@@ -14,7 +14,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MTIME = int(os.environ.get('SOURCE_DATE_EPOCH') or 1767225600)
 FILES = os.path.join(HERE, 'files')
 VERSION = re.search(r"const VERSION = '([^']+)'", open(os.path.join(FILES, 'usr/sbin/doti')).read()).group(1)
-PKG, FULL = 'doti', f'{VERSION}-1'
+PKG, UPKG, FULL = 'doti-kids-router', 'doti-kids-router-updater', f'{VERSION}-1'
 EXEC = ('usr/sbin/', 'usr/libexec/doti/', 'etc/init.d/', 'etc/uci-defaults/')
 CGI = '/usr/libexec/doti/cgi'
 PUB = ['hello', 'look']
@@ -104,7 +104,7 @@ export pkgname="{name}"
 
 UFILES = os.path.join(HERE, 'updater', 'files')
 UVERSION = re.search(r"const VERSION = '([^']+)'", open(os.path.join(UFILES, 'usr/share/doti-updater/doti-update.uc')).read()).group(1)
-UCONTROL = f"""Package: doti-updater
+UCONTROL = f"""Package: {UPKG}
 Version: {UVERSION}-1
 Depends: libc, ucode, ucode-mod-fs, uclient-fetch, ca-bundle, usign
 Section: net
@@ -112,9 +112,12 @@ Architecture: all
 Maintainer: 一点守护
 Description: 一点守护升级程序：每日报到、在线升级（验签、体检、回滚）。
 """
+# 装包（手动或安装脚本）时包里的就是最新的：去掉在线自更新留下的副本，免得启动器还用旧副本
+UCLEAR = """rm -rf /etc/doti-updater/slot-a /etc/doti-updater/slot-b /etc/doti-updater/active /etc/doti-updater/bad-slot /etc/doti-updater/fails
+"""
 UPOSTINST = """#!/bin/sh
 [ -n "${IPKG_INSTROOT}" ] && exit 0
-/etc/init.d/doti-updater enable
+""" + UCLEAR + """/etc/init.d/doti-updater enable
 /etc/init.d/doti-updater restart
 exit 0
 """
@@ -166,7 +169,7 @@ def ipk(path, control, scripts, data):
         f.write(targz([('./debian-binary', b'2.0\n', 0o644), ('./data.tar.gz', dat, 0o644), ('./control.tar.gz', ctl, 0o644)]))
 
 
-APK_INFO = {'arch': 'noarch', 'license': 'GPL-3.0-only', 'origin': 'doti', 'url': 'https://github.com/xautlx/doti-kids-router', 'maintainer': '一点守护'}
+APK_INFO = {'arch': 'noarch', 'license': 'GPL-3.0-only', 'origin': 'doti-kids-router', 'url': 'https://github.com/xautlx/doti-kids-router', 'maintainer': '一点守护'}
 
 
 def apk(path, name, version, depends, desc, scripts, data):
@@ -205,7 +208,7 @@ def apk(path, name, version, depends, desc, scripts, data):
 
 def build_updater():
     data, size = tree(UFILES, ('usr/sbin/', 'etc/init.d/'))
-    out = os.path.join(HERE, 'dist', f'doti-updater_{UVERSION}-1_all.ipk')
+    out = os.path.join(HERE, 'dist', f'{UPKG}_{UVERSION}-1_all.ipk')
     ipk(out, UCONTROL + f'Installed-Size: {size}\n', [('postinst', UPOSTINST), ('prerm', UPRERM)], data)
     print(out, f'{os.path.getsize(out)} 字节')
     return out
@@ -256,9 +259,9 @@ def build_apk():
     if not shutil.which('apk'):
         sys.exit('打 apk 包要 apk-tools 3（apk mkpkg），本机没有；GitHub Actions 在 Alpine 容器里打')
     data, _ = tree(UFILES, ('usr/sbin/', 'etc/init.d/'))
-    post, upgrade, prerm = apk_scripts('doti-updater', restart='/etc/init.d/doti-updater restart\n', extra_prerm=UPRERM.split('\n', 2)[2].rsplit('exit 0', 1)[0])
-    uout = os.path.join(HERE, 'dist', f'doti-updater-{UVERSION}-r1.apk')
-    apk(uout, 'doti-updater', UVERSION, UDEPENDS, UDESC, [('post-install', post), ('post-upgrade', upgrade), ('pre-deinstall', prerm)], data)
+    post, upgrade, prerm = apk_scripts(UPKG, extra_post='[ -n "${IPKG_INSTROOT}" ] || ' + UCLEAR, restart='/etc/init.d/doti-updater restart\n', extra_prerm=UPRERM.split('\n', 2)[2].rsplit('exit 0', 1)[0])
+    uout = os.path.join(HERE, 'dist', f'{UPKG}-{UVERSION}-r1.apk')
+    apk(uout, UPKG, UVERSION, UDEPENDS, UDESC, [('post-install', post), ('post-upgrade', upgrade), ('pre-deinstall', prerm)], data)
     print(uout, f'{os.path.getsize(uout)} 字节')
     data, _ = data_entries(uout, 'doti-updater.apk')
     post, upgrade, prerm = apk_scripts(PKG, extra_post=APK_POST_EXTRA, restart='/etc/init.d/doti restart\n', extra_prerm=PRERM.split('\n', 2)[2].rsplit('exit 0', 1)[0])
