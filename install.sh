@@ -125,5 +125,5 @@ if [ "$VIA" = mirror ]; then
 fi
 if [ -n "$old" ]; then say "原来的设置和绑定都还在，照常使用即可。"; exit 0; fi
 code=$(sed -n 's/.*"code": *"\([0-9A-Z]*\)".*/\1/p' /etc/doti/identity.json 2>/dev/null)
-say "1–2 分钟后会出现不用密码的 WiFi「DOTI-${code:-编号}-ADMIN」，手机连上它，打开微信小程序「一点守护」按提示绑定。"
+say "1–2 分钟后会出现不用密码的 WiFi「DOTI-${code:-XXXX}-ADMIN」，手机连上它，打开微信小程序「一点守护」按提示绑定。"
 say "这个 WiFi 只开 30 分钟，超时后断电重开路由器会再开 30 分钟。"

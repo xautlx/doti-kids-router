@@ -95,7 +95,7 @@ export function cmdsKey(ifs, pw) {
 	}
 	return out;
 };
-// 设家长密码：家长 WiFi 一开始就叫 DOTI-编号-ADMIN（不加密），首次设密码只加密码、不改名——
+// 设家长密码：家长 WiFi 一开始就叫 DOTI-XXXX-ADMIN（不加密），首次设密码只加密码、不改名——
 // 手机看到同名网络从不加密变成加密，会当成新网络弹出输密码框（华为、iPhone 实测），不用先忘记网络
 export function cmdsParent(ifs, pw, code) { return cmdsKey(ifs, pw); };
 
