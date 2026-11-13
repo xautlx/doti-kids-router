@@ -10,7 +10,7 @@ import { DOH_IPS, counts as blockCounts, mainConf as blockMain, pickDir as block
 import { cleanDomain, cleanText, defaults as settingsDefaults, merge as settingsMerge, LAN_FREE_DEFAULT, ALLOW_DOH_DEFAULT } from 'doti.settings';
 import { make as opsMake } from 'doti.ops';
 import { doneOf, keyState, remember, reportBody, urgent as remoteUrgent } from 'doti.remote';
-import { TEMP_SSID, adminSsid, apply as wifiApply, bins as wifiBins, cmdsDisabled, cmdsKey, cmdsParent, ifacesOf, kidNet, load as wifiLoad, parentHasPassword, parentIfaces, parentTargets, randDigits, shq, state as wifiState, validPassword } from 'doti.wifi';
+import { adminSsid, apply as wifiApply, bins as wifiBins, cmdsDisabled, cmdsKey, cmdsParent, ifacesOf, kidNet, load as wifiLoad, parentHasPassword, parentIfaces, parentTargets, randDigits, shq, state as wifiState, validPassword } from 'doti.wifi';
 import { follow as rootFollow, hash as rootHash, release as rootRelease } from 'doti.rootpw';
 import { add as usageAdd, devInfo, expired as usageExpired, onlineMin, pending as usagePending, toApi as usageApi, trendPush } from 'doti.usage';
 import { append as evAppend, step as evStep } from 'doti.events';
@@ -19,7 +19,7 @@ import { hmacSha256, sha256 } from 'doti.hmac';
 import { emptyList, indexOf as listIndex, isParent, join as listJoin, remove as listRemove, setProfile, sign, verify } from 'doti.auth';
 import { backoff, post as cloudPost, url as cloudUrl } from 'doti.cloud';
 
-const VERSION = '1.2.1';
+const VERSION = '1.3.0';
 const CLOCK_FIX = 120;
 const TREND_N = 60, TICK = 10, DT_MAX = 120, REAPPLY = 600, BASE_SAVE = 3600, WANT_ON = 3, WANT_OFF = 6, SEG_JITTER = 90, CONFIRM_TICKS = 3, LIMIT_KBPS = 100;   // LIMIT_KBPS：设置里没带限速时网速时的默认
 const cfg = {
@@ -510,7 +510,7 @@ function rootStep(id) {
 }
 
 // 认领限时
-const CLAIM_OPEN = 3600;
+const CLAIM_OPEN = 1800;
 let claimNext = 0;
 function claimStep(id) {
 	const m = mono();
@@ -525,17 +525,17 @@ function claimStep(id) {
 		log('已认领，家长 WiFi 重新打开');
 		return;
 	}
-	const temp = filter(ours, f => f.ssid == TEMP_SSID && (f.enc == '' || f.enc == 'none'));
+	const temp = filter(ours, f => f.enc == '' || f.enc == 'none');   // 还没设密码的家长 WiFi
 	if (!length(temp)) return;
 	const open = m < +(fs.readfile(tmp('claim-from')) ?? 0) + CLAIM_OPEN;
 	if (open && off) {
 		wifiApply(b, cmdsDisabled(temp, true));
 		fs.unlink(etc('temp-off'));
-		log('开机 1 小时内，临时家长 WiFi 重新打开等认领');
+		log('开机 30 分钟内，临时家长 WiFi 重新打开等认领');
 	}
 	else if (!open && !off && wifiApply(b, cmdsDisabled(temp, false))) {
 		writeText(etc('temp-off'), '' + now());
-		log('1 小时没人认领，临时家长 WiFi 已关闭（断电重开路由器再开 1 小时）');
+		log('30 分钟没人认领，临时家长 WiFi 已关闭（断电重开路由器再开 30 分钟）');
 	}
 }
 
@@ -563,7 +563,7 @@ function unbind(remote) {
 			}
 		}
 		for (let f in filter(parentIfaces(o, old.code), x => x.ours)) {
-			push(cmds, 'set wireless.' + f.sec + '.ssid=' + shq(TEMP_SSID));
+			push(cmds, 'set wireless.' + f.sec + '.ssid=' + shq(adminSsid(id.code)));   // 新编号的名字，不加密
 			push(cmds, 'set wireless.' + f.sec + '.encryption=none');
 			push(cmds, 'delete wireless.' + f.sec + '.key');
 		}
@@ -829,7 +829,7 @@ function info() {
 	const pw = id.code ? parentHasPassword(wifiLoad(wifiBins()), id.code) : false;
 	return { version: VERSION, updater: uv ? uv[1] : '', running: exists(tmp('running')) && !!st && now() - st.mtime < 90,
 		code: id.code ?? '', registered: !!id.registered, parents: length(readJson(etc('parents.json'), null)?.parents ?? []), kidNets: length(nets()),
-		parentWifi: pw ? 'DOTI-' + id.code + '-ADMIN' : TEMP_SSID, lastCheckin: ck?.at ?? 0,
+		parentWifi: adminSsid(id.code), parentWifiOpen: !pw, lastCheckin: ck?.at ?? 0,
 		...(up ? { lastUpgrade: { from: up.prev, to: up.to, result: up.result, reason: up.reason ?? '', at: up.at } } : {}) };
 }
 
@@ -884,7 +884,7 @@ function run() {
 // 收到就写 bell 标记，管控程序下一圈（1 秒内）去同步。门铃只是空消息；连不上 30 秒后重连，期间靠 30 分钟兜底同步。
 // 只在服务期内连（bellWant）；服务期到了管控程序把它断开，续上了这里 30 秒内自己连上
 function bellHost() {
-	const e = getenv('DOTI_BELL_HOST');
+	const e = getenv('DOTI_BELL_HOST') || trim(fs.readfile('/usr/share/doti/bell') ?? '');
 	if (e) return e;
 	const m = match(cloudUrl() ?? '', /^https?:\/\/([^\/:]+)/);
 	return m ? m[1] : null;

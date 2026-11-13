@@ -14,8 +14,8 @@ The overview, requirements, install and pairing steps, and how to verify the pac
 
 | | GitHub Pages | Faster in China |
 |---|---|---|
-| Homepage | [xautlx.github.io/doti-kids-router](https://xautlx.github.io/doti-kids-router/?lang=en) | [doti.entdiy.xyz](https://doti.entdiy.xyz/?lang=en) |
-| Quick Start | [xautlx.github.io/doti-kids-router/quick-start](https://xautlx.github.io/doti-kids-router/quick-start/?lang=en) | [doti.entdiy.xyz/quick-start](https://doti.entdiy.xyz/quick-start/?lang=en) |
+| Homepage | [xautlx.github.io/doti-kids-router](https://xautlx.github.io/doti-kids-router/?lang=en) | [doti.top](https://doti.top/?lang=en) |
+| Quick Start | [xautlx.github.io/doti-kids-router/quick-start](https://xautlx.github.io/doti-kids-router/quick-start/?lang=en) | [doti.top/quick-start](https://doti.top/quick-start/?lang=en) |
 
 Packages are in [Releases](../../releases) (also mirrored to the gitee repository of the same name).
 

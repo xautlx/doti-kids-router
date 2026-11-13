@@ -13,7 +13,6 @@ function sh(cmd) {
 	return s ?? '';
 }
 // 没认领时家长 WiFi 用固定临时名，第一次设密码时改成带编号的名字
-export const TEMP_SSID = 'DOTI-TEMP-ADMIN';
 export function adminSsid(code) { return 'DOTI-' + code + '-ADMIN'; };
 export function shq(s) { return "'" + replace(s, "'", "'\\''") + "'"; };
 export function kidNet(key) { return 'doti' + substr(key, 1); };
@@ -45,7 +44,7 @@ export function ifacesOf(o, net) {
 
 // 主网络上的热点，标出哪个是我们的家长 WiFi
 export function parentIfaces(o, code) {
-	return map(filter(ifacesOf(o, 'lan'), f => f.mode == 'ap'), f => ({ ...f, ours: f.ssid == adminSsid(code) || f.ssid == TEMP_SSID }));
+	return map(filter(ifacesOf(o, 'lan'), f => f.mode == 'ap'), f => ({ ...f, ours: f.ssid == adminSsid(code) }));
 };
 
 // 设家长密码的目标
@@ -96,12 +95,9 @@ export function cmdsKey(ifs, pw) {
 	}
 	return out;
 };
-// 设家长密码
-export function cmdsParent(ifs, pw, code) {
-	const out = cmdsKey(ifs, pw);
-	for (let f in ifs) if (f.ssid == TEMP_SSID) push(out, 'set wireless.' + f.sec + '.ssid=' + shq(adminSsid(code)));
-	return out;
-};
+// 设家长密码：家长 WiFi 一开始就叫 DOTI-编号-ADMIN（不加密），首次设密码只加密码、不改名——
+// 手机看到同名网络从不加密变成加密，会当成新网络弹出输密码框（华为、iPhone 实测），不用先忘记网络
+export function cmdsParent(ifs, pw, code) { return cmdsKey(ifs, pw); };
 
 // ---------- 读写 ----------
 export function load(b) { return parseShow(sh(b.uci + ' show wireless 2>/dev/null')); };

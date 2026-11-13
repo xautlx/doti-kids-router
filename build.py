@@ -232,6 +232,10 @@ def data_entries(upd, upd_name='doti-updater.ipk'):
         out.append(('./usr/share/doti/cloud', (cu + '\n').encode(), 0o644))
     else:
         print('提醒：没有云端地址（DOTI_CLOUD_URL 或 device/cloud.url），这个包连不上云端')
+    # 门铃主机名（MQTT 1883）：单独一个名字，以后门铃挪到别的服务器只改解析；没有就从云端地址里取主机名
+    bh = os.path.join(HERE, 'bell.host')
+    if not os.environ.get('DOTI_CLOUD_URL') and os.path.exists(bh):
+        out.append(('./usr/share/doti/bell', (open(bh).read().strip() + '\n').encode(), 0o644))
     # 备用云端地址（可选，主地址网络不通时用；现在没有）
     bp = os.path.join(HERE, 'cloud-backup.url')
     if not os.environ.get('DOTI_CLOUD_URL') and os.path.exists(bp):

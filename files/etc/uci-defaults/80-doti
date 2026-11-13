@@ -116,7 +116,7 @@ printf '%s]\n' "$NJSON" > "$ETC/nets.json"
 
 # 7 家长 WiFi
 if [ ! -f "$ETC/admin-wifi" ]; then
-	ASSID="DOTI-TEMP-ADMIN"
+	ASSID="DOTI-$CODE-ADMIN"   # 一开始就用带编号的名字、不加密，首次设置只加密码不改名
 	for d in $OPEN; do uci set wireless.$d.ssid="$ASSID"; log "家长 WiFi $ASSID（原 WiFi 没密码，改名）"; done
 	for radio in $(radios); do
 		[ "$(uci -q get wireless.$radio.disabled)" = "1" ] && continue
@@ -165,7 +165,7 @@ fi
 
 uci commit network; uci commit dhcp; uci commit firewall; uci commit wireless; uci commit uhttpd
 
-# 认领限时从安装这一刻算 1 小时
+# 认领限时从安装这一刻算 30 分钟
 mkdir -p /tmp/doti && cut -d. -f1 /proc/uptime > /tmp/doti/claim-from
 
 # 11 后台生效
