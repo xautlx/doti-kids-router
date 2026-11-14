@@ -38,12 +38,13 @@ export function fromTemplate(tpl, key, name, ver) {
 	const t = TEMPLATES[tpl];
 	return { key, ver: ver ?? 1, name: name || DEFAULT_NAMES[key] || key, template: tpl,
 		surfMin: t.surfMin, limitMin: t.limitMin, dailyMaxMin: t.dailyMaxMin,
-		windows: t.sleep ? sleepWins(t.sleep[0], t.sleep[1]) : [], limitKbps: LIMIT_KBPS_DEFAULT, lanFree: LAN_FREE_DEFAULT, kidView: KID_VIEW_DEFAULT, allowDoh: ALLOW_DOH_DEFAULT };
+		windows: t.sleep ? sleepWins(t.sleep[0], t.sleep[1]) : [], limitKbps: LIMIT_KBPS_DEFAULT, lanFree: LAN_FREE_DEFAULT, kidView: KID_VIEW_DEFAULT, allowDoh: ALLOW_DOH_DEFAULT,
+		block: { categories: [], off: [] } };
 };
 
 export function defaults(keys, code) {
 	return { globalVer: 1, routerName: defaultRouterName(code),
-		block: { categories: [], except: {}, custom: [], paused: [], shareCustom: true },
+		block: { custom: [] },
 		networks: map(keys, k => fromTemplate('lower', k)) };
 };
 
@@ -100,6 +101,22 @@ function checkWindows(ws) {
 	return [out, null];
 }
 
+// 一个孩子网络的网站屏蔽：开着哪几个可选分类；自己加的网站（名单所有网络共用）里这个网络关掉了哪几个
+function checkNetBlock(b) {
+	if (type(b) != 'object') return [null, 'block'];
+	const cats = [], off = [];
+	for (let c in (b.categories ?? [])) {
+		if (!inList(c, CATEGORIES)) return [null, 'block.categories'];
+		if (!inList(c, cats)) push(cats, c);
+	}
+	for (let d in (b.off ?? [])) {
+		const c = cleanDomain(d);
+		if (c && !inList(c, off)) push(off, c);
+	}
+	if (length(off) > MAX_CUSTOM) return [null, 'block.off'];
+	return [{ categories: cats, off }, null];
+}
+
 // 校验一个网络的设置
 export function checkNet(n) {
 	if (type(n) != 'object') return [null, 'network'];
@@ -115,40 +132,33 @@ export function checkNet(n) {
 	if (n.template != null && n.template != '' && !TEMPLATES[n.template]) return [null, 'template'];
 	const w = checkWindows(n.windows ?? []);
 	if (w[1]) return [null, w[1]];
+	const b = checkNetBlock(n.block ?? {});
+	if (b[1]) return [null, b[1]];
 	const name = cleanText(n.name, 10);
 	return [{ key: n.key, ver: 0, name: name || DEFAULT_NAMES[n.key] || n.key, template: n.template || '',
-		surfMin: n.surfMin, limitMin: n.limitMin, dailyMaxMin: n.surfMin == 1440 ? 0 : n.dailyMaxMin, windows: w[0], limitKbps: kbps, lanFree: lan, kidView: kv, allowDoh: doh }, null];
+		surfMin: n.surfMin, limitMin: n.limitMin, dailyMaxMin: n.surfMin == 1440 ? 0 : n.dailyMaxMin, windows: w[0], limitKbps: kbps, lanFree: lan, kidView: kv, allowDoh: doh, block: b[0] }, null];
 };
 
-function checkBlock(b, old) {
+// 自己加的屏蔽网站：所有孩子网络共用一份名单，在哪个网络加的都对所有网络生效（各网络可以关掉其中几个）
+function checkBlock(b) {
 	if (type(b) != 'object') return [null, 'block'];
-	const cats = [];
-	for (let c in (b.categories ?? [])) {
-		if (!inList(c, CATEGORIES)) return [null, 'block.categories'];
-		if (!inList(c, cats)) push(cats, c);
-	}
 	const custom = [];
 	for (let d in (b.custom ?? [])) {
 		const c = cleanDomain(d);
 		if (c && !inList(c, custom)) push(custom, c);
 	}
 	if (length(custom) > MAX_CUSTOM) return [null, 'block.custom'];
-	// 某个分类不挡哪几个孩子网络（UI-KID-09e）：只对开着的分类记，空的不记
-	if (b.except != null && type(b.except) != 'object') return [null, 'block.except'];
-	const except = {};
-	for (let c, ks in (b.except ?? {})) {
-		if (!inList(c, CATEGORIES) || type(ks) != 'array') return [null, 'block.except'];
-		if (!inList(c, cats)) continue;
-		const out = [];
-		for (let k in ks) if (inList(k, NET_KEYS) && !inList(k, out)) push(out, k);
-		if (length(out)) except[c] = out;
+	return [{ custom }, null];
+}
+
+// 名单里删掉的网站，从各网络「关掉的」里也去掉（以后再加回来时默认开着）；改了的网络版本号加一
+function pruneOff(next, changedVer) {
+	const custom = next.block?.custom ?? [];
+	for (let i = 0; i < length(next.networks); i++) {
+		const n = next.networks[i], off = n.block?.off ?? [];
+		const keep = filter(off, d => inList(d, custom));
+		if (length(keep) != length(off)) { n.block = { ...n.block, off: keep }; if (changedVer && !changedVer[n.key]) n.ver++; }
 	}
-	const paused = [];
-	for (let d in (b.paused ?? [])) {
-		const c = cleanDomain(d);
-		if (c && inList(c, custom) && !inList(c, paused)) push(paused, c);
-	}
-	return [{ categories: cats, except, custom, paused, shareCustom: b.shareCustom ?? old?.shareCustom ?? true }, null];
 }
 
 // 旧路由器的名字还是默认的「一点守护路由器 <编号>」：编号换了，不带过来
@@ -159,9 +169,9 @@ function isDefaultName(n) {
 
 // 从恢复包整份替换设置；路由器名只带家长改过的，默认名按 code（恢复旧编号时是旧编号）
 export function restore(cur, s, keys, code) {
-	const b = type(s?.block) == 'object' ? checkBlock(s.block, cur.block)[0] : null;
+	const b = type(s?.block) == 'object' ? checkBlock(s.block)[0] : null;
 	const name = cleanText(s?.routerName, 12);
-	return { ...cur, routerName: name && !isDefaultName(name) ? name : isDefaultName(cur.routerName) ? defaultRouterName(code) : cur.routerName, block: b ?? cur.block, globalVer: cur.globalVer + 1,
+	const next = { ...cur, routerName: name && !isDefaultName(name) ? name : isDefaultName(cur.routerName) ? defaultRouterName(code) : cur.routerName, block: b ?? cur.block, globalVer: cur.globalVer + 1,
 		networks: map(cur.networks, n => {
 			for (let x in (s?.networks ?? [])) if (x?.key == n.key && index(keys, n.key) >= 0) {
 				const c = checkNet(x);
@@ -169,16 +179,18 @@ export function restore(cur, s, keys, code) {
 			}
 			return n;
 		}) };
+	pruneOff(next, null);
+	return next;
 };
 
-// 保存设置
+// 保存设置：带的每一部分（全局、各网络）都核对版本号，有一处对不上整次不存
 export function merge(cur, req, keys, code) {
 	if (type(req) != 'object' || type(req.base) != 'object') return { err: 'base' };
 	const next = json(sprintf('%J', cur)), conflicts = [];
 	const wantGlobal = req.routerName != null || req.block != null;
 	let gBlock = null;
 	if (req.block != null) {
-		const b = checkBlock(req.block, cur.block);
+		const b = checkBlock(req.block);
 		if (b[1]) return { err: b[1] };
 		gBlock = b[0];
 	}
@@ -198,14 +210,19 @@ export function merge(cur, req, keys, code) {
 			next.globalVer = cur.globalVer + 1;
 		}
 	}
+	const saved = {};
 	for (let n in nets) {
 		let idx = -1;
 		for (let i = 0; i < length(next.networks); i++) if (next.networks[i].key == n.key) idx = i;
 		const curVer = idx >= 0 ? next.networks[idx].ver : 0;
 		if (req.base[n.key] !== curVer) { push(conflicts, n.key); continue; }
 		n.ver = curVer + 1;
+		saved[n.key] = true;
 		if (idx >= 0) next.networks[idx] = n;
 		else push(next.networks, n);
 	}
+	// 一次提交整体乐观锁：有一处版本对不上，整次都不存，回最新的设置让家长重改
+	if (length(conflicts)) return { settings: cur, conflicts, err: null };
+	pruneOff(next, saved);
 	return { settings: next, conflicts, err: null };
 };

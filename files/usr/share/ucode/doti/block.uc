@@ -10,19 +10,19 @@ export function pickDir(etcDir, etcManifest, shareDir, shareManifest) {
 	return (etcManifest?.ver ?? 0) > (shareManifest?.ver ?? 0) ? [etcDir, etcManifest] : [shareDir, shareManifest];
 };
 
-// 生成 dnsmasq 主配置。key：哪个孩子网络（每个孩子网络一个屏蔽 DNS），分类里「不挡这个网络」的跳过
-export function mainConf(dir, manifest, blk, key) {
+// 生成一个孩子网络（每个孩子网络一个屏蔽 DNS）的 dnsmasq 主配置。custom：自己加的网站（所有网络共用）；nb：这个网络的网站屏蔽（开着的分类、关掉的自己加的网站）
+export function mainConf(dir, manifest, custom, nb) {
 	let s = '';
-	const on = filter(blk?.categories ?? [], x => index(OPTIONAL, x) >= 0 && index(blk?.except?.[x] ?? [], key) < 0);
+	const on = filter(nb?.categories ?? [], x => index(OPTIONAL, x) >= 0);
 	for (let c in ['base', 'always', ...on])
 		if (manifest?.files?.[c]) s += 'conf-file=' + dir + '/' + c + '.conf\n';
-	for (let d in blk?.custom ?? []) if (index(blk?.paused ?? [], d) < 0) s += sprintf('address=/%s/192.0.2.1\naddress=/%s/::\n', d, d);
+	for (let d in custom ?? []) if (index(nb?.off ?? [], d) < 0) s += sprintf('address=/%s/192.0.2.1\naddress=/%s/::\n', d, d);
 	return s;
 };
 
-// 状态里的条数
-export function counts(manifest, blk) {
-	const n = { custom: length(filter(blk?.custom ?? [], d => index(blk?.paused ?? [], d) < 0)) };
+// 状态里的条数：custom 是自己加的网站总数
+export function counts(manifest, custom) {
+	const n = { custom: length(custom ?? []) };
 	for (let c in keys(manifest?.files ?? {})) n[c] = manifest.files[c].n;
 	return n;
 };

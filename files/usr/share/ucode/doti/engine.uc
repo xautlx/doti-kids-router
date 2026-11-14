@@ -47,6 +47,7 @@ export function step(n, st, plan, ctx) {
 		if (n.surf > st.surf) st.remain += n.surf - st.surf;
 		if (st.remain > n.surf) st.remain = n.surf;
 	}
+	else if (n.surf >= 86400) { st.mode = 'open'; st.remain = n.surf; st.idle = 0; }   // 改成全天一直开放：正在休息的这一轮马上结束
 	else if (st.remain > n.lim) st.remain = n.lim;
 	st.surf = n.surf;
 

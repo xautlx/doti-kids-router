@@ -19,7 +19,7 @@ import { hmacSha256, sha256 } from 'doti.hmac';
 import { emptyList, indexOf as listIndex, isParent, join as listJoin, remove as listRemove, setProfile, sign, verify } from 'doti.auth';
 import { backoff, post as cloudPost, url as cloudUrl } from 'doti.cloud';
 
-const VERSION = '1.3.0';
+const VERSION = '1.4.0';
 const CLOCK_FIX = 120;
 const TREND_N = 60, TICK = 10, DT_MAX = 120, REAPPLY = 600, BASE_SAVE = 3600, WANT_ON = 3, WANT_OFF = 6, SEG_JITTER = 90, CONFIRM_TICKS = 3, LIMIT_KBPS = 100;   // LIMIT_KBPS：设置里没带限速时网速时的默认
 const cfg = {
@@ -175,7 +175,7 @@ function usageRoll(day, hour) {
 	usageHour = hour;
 }
 
-// 每个孩子网络一个屏蔽 DNS（UI-KID-09e：分类可以只挡部分网络）：k1/k2/k3 → 端口 5390/5391/5392，配置 block-k1.conf …，pid 文件 doti-dns-k1.pid …
+// 每个孩子网络一个屏蔽 DNS（每个孩子网络各自开哪些屏蔽分类、关掉哪些自己加的网站）：k1/k2/k3 → 端口 5390/5391/5392，配置 block-k1.conf …，pid 文件 doti-dns-k1.pid …
 const DNS_KEYS = ['k1', 'k2', 'k3'];
 function dnsPort(key) { return cfg.dnsPort + index(DNS_KEYS, key); }
 function dnsPidFile(key) { return replace(cfg.dnsPid, /\.pid$/, '-' + key + '.pid'); }
@@ -185,9 +185,9 @@ function dnsAlive(key) {
 }
 function blockTick(c) {
 	const d = blockDir(etc('blocklist'), readJson(etc('blocklist/manifest.json'), null), cfg.blocklist, readJson(cfg.blocklist + '/manifest.json', null));
-	const b = c.settings.block ?? {}, blk = { ...b, custom: filter(map(b.custom ?? [], cleanDomain), x => x) };
+	const custom = filter(map(c.settings.block?.custom ?? [], cleanDomain), x => x);
 	const texts = {};
-	for (let k in DNS_KEYS) texts[k] = blockMain(d[0], d[1], blk, k);
+	for (let k in DNS_KEYS) texts[k] = blockMain(d[0], d[1], custom, netSettings(c, k)?.block);
 	const all = join('\n---\n', map(DNS_KEYS, k => texts[k]));
 	if (all != blkConf) {
 		let changed = false;
@@ -197,7 +197,7 @@ function blockTick(c) {
 			if (pid > 0) system(sprintf('kill %d 2>/dev/null', pid));   // procd 马上重启它，读新配置
 			changed = true;
 		}
-		if (changed) log('屏蔽名单更新：v' + (d[1]?.ver ?? 0) + '，分类 ' + join(' ', map(b.categories ?? [], x => x + (length(b.except?.[x] ?? []) ? '(不挡 ' + join('/', b.except[x]) + ')' : ''))) + '，自定义 ' + length(b.custom ?? []));
+		if (changed) log('屏蔽名单更新：v' + (d[1]?.ver ?? 0) + '，' + join(' ', map(c.settings.networks ?? [], n => n.key + ':' + join('/', n.block?.categories ?? []) + (length(n.block?.off ?? []) ? '(关 ' + length(n.block.off) + ')' : ''))) + '，自定义 ' + length(custom));
 		blkConf = all;
 	}
 	// 只转在跑的那几个网络；某个网络的屏蔽 DNS 没在跑，这个网络先用系统 DNS
@@ -211,7 +211,7 @@ function blockTick(c) {
 		if (blkKey != null || length(devs)) log(length(devs) ? '孩子网络 DNS 转到屏蔽名单：' + join(' ', devs) : '屏蔽名单的 DNS 没在跑，孩子网络先用系统 DNS');
 		blkKey = key;
 	}
-	blkStat = { on: length(devs) > 0, ver: d[1]?.ver ?? 0, n: blockCounts(d[1], c.settings.block) };
+	blkStat = { on: length(devs) > 0, ver: d[1]?.ver ?? 0, n: blockCounts(d[1], custom) };
 }
 
 function windowOf(ns, name) {

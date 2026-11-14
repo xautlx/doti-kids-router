@@ -38,7 +38,7 @@ export function make(d) {
 	function saveSettings(code, body, now) {
 		const r = withLock(() => {
 			const m = S.merge(settingsNow(code), body, netKeys(), code);
-			if (!m.err) writeJson(etc('settings.json'), m.settings);
+			if (!m.err && !length(m.conflicts)) writeJson(etc('settings.json'), m.settings);
 			return m;
 		}, now);
 		return r[1] ? { err: 'INTERNAL' } : r[0];
