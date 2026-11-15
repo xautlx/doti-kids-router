@@ -3,7 +3,7 @@
 'use strict';
 import * as fs from 'fs';
 
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const PKG = 'doti-kids-router', UPKG = 'doti-kids-router-updater';
 const cfg = {
 	dir: getenv('DOTI_UPD_DIR') || '/etc/doti-updater',
@@ -436,13 +436,17 @@ function envInfo() {
 	if (type(devs) == 'object') { const n = {}; for (let mac in devs) { const t = devs[mac]?.type ?? 'other'; n[t] = (n[t] ?? 0) + 1; } e.devs = n; }
 	return e;
 }
+// 上次报到云端回的错误（LIMIT：两次报到不到 60 秒，云端不收）
+let lastErr = null;
 function checkin() {
 	const id = identity();
+	lastErr = null;
 	if (!id.registered) return null;
 	const last = readJson(F('last.json'), null), m = readJson(cfg.etc + '/member.json', null);
 	const sets = readJson(cfg.etc + '/sets.json', null)?.sets;
 	const r = post('checkin', { version: installed(), updater: VERSION, lastUpgrade: last && !last.sent ? { 'from': last.prev, to: last.to, result: last.result, reason: last.reason, at: last.at } : null,
 		claimed: claimed(), kidNets: kidNets(), memberUntil: m?.x ?? 0, haveCurrent: haveCurrent(), env: envInfo(), ...(type(sets) == 'string' ? { sets } : {}) });
+	lastErr = r?.error ?? null;
 	if (r?.error == 'CLOCK') { clockFix(r.now); return null; }
 	if (r?.error == 'NOT_REGISTERED') { fs.mkdir(cfg.run, 0700); fs.writefile(cfg.run + '/unregistered.now', '' + now()); log('云端没有这台的记录，通知主程序重新登记'); return null; }
 	if (!r?.ok) return null;
@@ -524,6 +528,8 @@ function daemon() {
 				if (r.updater && selfUpdate(r.updater)) return 0;
 				if (want && fs.stat(F('pending.json'))) installPending();
 			}
+			// 报得太勤（刚报过不到 60 秒，比如马上检查升级时刚换了升级程序）：65 秒后再报，不算失败、不退避
+			else if (lastErr == 'LIMIT') retryAt = t + 65;
 			else if (++fails <= length(RETRY)) retryAt = t + int(RETRY[fails - 1] * (0.7 + rnd() * 0.6));
 			else { fails = 0; retryAt = 0; catchUp = 0; }
 		}
