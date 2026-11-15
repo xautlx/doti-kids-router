@@ -3,7 +3,7 @@
 'use strict';
 import * as fs from 'fs';
 import { classify, nextOf, segOf, step as ctlStep, toEngine, today } from 'doti.engine';
-import { apply as nftApply, baseRuleset, dnsRuleset, isPrivate, limitRuleset, listJSON, parseCounters, parseDrops, publicIp, removeAll } from 'doti.nft';
+import { apply as nftApply, baseRuleset, dnsRuleset, freeIpList, isPrivate, limitRuleset, listJSON, parseCounters, parseDrops, removeAll } from 'doti.nft';
 import { features, parseConntrack, parseLeases, parseSets, parseStations, prefixes } from 'doti.calib';
 import { create as detCreate, save as detSave, step as detStep } from 'doti.detect';
 import { DOH_IPS, counts as blockCounts, mainConf as blockMain, pickDir as blockDir } from 'doti.block';
@@ -19,7 +19,7 @@ import { hmacSha256, sha256 } from 'doti.hmac';
 import { emptyList, indexOf as listIndex, isParent, join as listJoin, remove as listRemove, setProfile, sign, verify } from 'doti.auth';
 import { backoff, post as cloudPost, url as cloudUrl } from 'doti.cloud';
 
-const VERSION = '1.4.1';
+const VERSION = '1.4.2';
 const CLOCK_FIX = 120;
 const TREND_N = 60, TICK = 10, DT_MAX = 120, REAPPLY = 600, BASE_SAVE = 3600, WANT_ON = 3, WANT_OFF = 6, SEG_JITTER = 90, CONFIRM_TICKS = 3, LIMIT_KBPS = 100;   // LIMIT_KBPS：设置里没带限速时网速时的默认
 const cfg = {
@@ -128,20 +128,22 @@ let st = {}, prev = {}, lastTick = null, limitKey = null, limitFail = null, last
 let det = null, snapPrev = null, ctState = { seen: {} }, limitedNow = {}, lastBaseSave = 0, dropPrev = {};
 let busy = {}, busyHit = {}, busyMiss = {}, want = {}, seg = {};
 let usage = null, usageDay = '', usageHour = -1, stateHour = -1, lastStatus = null, trend = {};
-let rrmAt = 0, wifiKey = null, baseKey = null, cloudIp = null;
+let rrmAt = 0, wifiKey = null, baseKey = null, freeIps = [];
 let blkConf = null, blkKey = null, blkStat = null, wifiOn = null;
 // 状态变化记录：每个网络上一步的样子（换一天清空），刚开机的第一步记「路由器重启」
 let evMem = {}, evDay = '', evBoot = +(split(fs.readfile('/proc/uptime') ?? '0', ' ')[0]) < 300 ? 'reboot' : 'restart';
 
-// 一点守护云端的公网 IP：孩子网络访问它不限速、不计时（要时间、拍照上传、看家长的回应）。云端在每个回包里带上（cloudIp），
-// 不另外解析域名；记在 /etc/doti/cloud-ip（变了才写），开机先用它。没收到过就不放行；变了统计表、限速表下一圈重新下发
+// 不限速地址（可以几个）：孩子网络访问它们不限速、不计时。现在是云端自己（要时间、拍照上传、看家长的回应），以后需要放开的别的地址
+// 也在里面。云端在每个回包里带上（freeIps），不另外解析域名；记在 /etc/doti/free-ips（一行一个，变了才写），开机先用它。
+// 没收到过就不放行；变了统计表、限速表下一圈重新下发
 function cloudHost() { const m = match(cloudUrl() ?? '', /^https?:\/\/([^\/:]+)/); return m ? m[1] : null; }
-function cloudIpSeen(v) {
-	const ip = publicIp(v);
-	if (!ip || ip == cloudIp) return;
-	cloudIp = ip;
-	writeText(etc('cloud-ip'), ip);
-	log('云端地址 ' + ip + '：孩子网络访问它不限速、不计时');
+const ipKey = () => join(',', freeIps);
+function freeIpsSeen(r) {
+	const l = freeIpList(r);
+	if (!length(l) || join(',', l) == ipKey()) return;
+	freeIps = l;
+	writeText(etc('free-ips'), join('\n', l) + '\n');
+	log('不限速地址 ' + join(' ', l) + '：孩子网络访问它们不限速、不计时');
 }
 
 // 设置里没带这个开关的按默认（关）
@@ -150,9 +152,9 @@ function lanFreeOf(ns) { return !!(ns?.lanFree ?? LAN_FREE_DEFAULT); }
 // 统计表：打开「家里局域网不计时、不限速」的网络只统计和内网以外的流量；设置变了重新下发
 function baseApply(c) {
 	const gs = map(c.nets, n => ({ ...n, lanFree: lanFreeOf(netSettings(c, n.key)) }));
-	const k = join(',', map(gs, g => g.key + (g.lanFree ? '+lan' : ''))) + '|' + (cloudIp ?? '');
+	const k = join(',', map(gs, g => g.key + (g.lanFree ? '+lan' : ''))) + '|' + ipKey();
 	if (k == baseKey) return;
-	if (nftApply(cfg.nft, tmp('base.nft'), baseRuleset(gs, cloudIp)) != 0) return log('统计规则下发失败，见 ' + tmp('base.nft'));
+	if (nftApply(cfg.nft, tmp('base.nft'), baseRuleset(gs, freeIps)) != 0) return log('统计规则下发失败，见 ' + tmp('base.nft'));
 	if (baseKey != null) log('统计规则更新：' + k);
 	baseKey = k;
 }
@@ -363,9 +365,9 @@ function tick(id, c) {
 	if (det?.dirty && m - lastBaseSave >= BASE_SAVE) saveBaseline();
 
 	const lim = map(filter(outs, o => o.limited), o => ({ key: o.key, dev: o.dev, kbps: o.kbps, lanFree: o.lanFree }));
-	const key = join(',', sort(map(lim, x => x.dev + '@' + x.kbps + (x.lanFree ? '+lan' : '')))) + '|' + (cloudIp ?? '');
+	const key = join(',', sort(map(lim, x => x.dev + '@' + x.kbps + (x.lanFree ? '+lan' : '')))) + '|' + ipKey();
 	if (key != limitKey || m - lastLimit >= REAPPLY) {
-		if (nftApply(cfg.nft, tmp('limit.nft'), limitRuleset(lim, cloudIp)) == 0) {
+		if (nftApply(cfg.nft, tmp('limit.nft'), limitRuleset(lim, freeIps)) == 0) {
 			if (key != limitKey) log('限速网络：' + (join(' ', map(lim, x => x.key)) || '无'));
 			limitKey = key; lastLimit = m;
 		}
@@ -429,7 +431,7 @@ function clockFix(cloudNow) {
 function cloudOk(r) {
 	writeJson(tmp('cloud.json'), { lastOk: now() });
 	clockFix(r?.now);
-	cloudIpSeen(r?.cloudIp);
+	freeIpsSeen(r);
 }
 function call(id, op, body) {
 	const r = cloudPost(hmacSha256, id, op, now(), body, tmp());
@@ -863,7 +865,10 @@ function run() {
 	det = detCreate(readJson(etc('baseline.json'), null));
 	lastBaseSave = mono();
 	let nextTick = 0, nextRrm = mono() + 30, seen = gen();
-	cloudIp = publicIp(trim(fs.readfile(etc('cloud-ip')) ?? ''));   // 开机先用上次云端告诉的
+	// 开机先用上次云端告诉的；1.4.1 记在 cloud-ip（一个），读一次就删
+	const fl = fs.readfile(etc('free-ips')) ?? fs.readfile(etc('cloud-ip'));
+	freeIps = freeIpList({ freeIps: split(trim(fl ?? ''), '\n') });
+	if (fs.stat(etc('cloud-ip'))) { if (length(freeIps)) writeText(etc('free-ips'), join('\n', freeIps) + '\n'); fs.unlink(etc('cloud-ip')); }
 	setApplied(seen);
 	log('启动 ' + VERSION + '，编号 ' + id.code);
 	while (!exists(tmp('off'))) {
@@ -878,7 +883,7 @@ function run() {
 		}
 		else if (m >= nextTick) { tick(id, c); nextTick = m + TICK; }
 		cloudStep(id, c);
-		if (cloudIp && index(baseKey ?? '', '|' + cloudIp) < 0) baseApply(c);
+		if (length(freeIps) && substr(baseKey ?? '', -length(ipKey()) - 1) != '|' + ipKey()) baseApply(c);
 		claimStep(id);
 		rootStep(id);
 		if (remoteStep(id, c)) { seen = -1; nextTick = 0; }
