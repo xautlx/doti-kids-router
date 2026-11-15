@@ -19,7 +19,7 @@ import { hmacSha256, sha256 } from 'doti.hmac';
 import { emptyList, indexOf as listIndex, isParent, join as listJoin, remove as listRemove, setProfile, sign, verify } from 'doti.auth';
 import { backoff, post as cloudPost, url as cloudUrl } from 'doti.cloud';
 
-const VERSION = '1.4.2';
+const VERSION = '1.4.3';
 const CLOCK_FIX = 120;
 const TREND_N = 60, TICK = 10, DT_MAX = 120, REAPPLY = 600, BASE_SAVE = 3600, WANT_ON = 3, WANT_OFF = 6, SEG_JITTER = 90, CONFIRM_TICKS = 3, LIMIT_KBPS = 100;   // LIMIT_KBPS：设置里没带限速时网速时的默认
 const cfg = {
@@ -761,6 +761,15 @@ function histStep(id, day, m) {
 }
 
 // 每圈一次；执行了命令返回 true
+// 云端让马上检查升级（同步回包带 updNow：管理员发起的时间）：交给升级程序（写 /tmp/doti/upd.now，它几秒内看到就马上报到、
+// 拿到新版本立即装）；同一次只交一回
+function updNowSeen(r) {
+	const v = r?.updNow;
+	if (type(v) != 'int' || v <= 0 || trim(fs.readfile(tmp('upd.now')) ?? '') == '' + v) return;
+	writeText(tmp('upd.now'), '' + v);
+	log('云端让马上检查升级');
+}
+
 function remoteStep(id, c) {
 	const look = takeMark('look');   // 孩子查看页点了刷新：服务期内不用（有门铃），服务期外问一次云端（续费后尽快生效）
 	// 门铃响过就记着，直到真的同步了才算用掉；门铃能响说明云端通，不用等失败退避
@@ -804,6 +813,7 @@ function remoteStep(id, c) {
 	rm.acks = []; rm.last = m; rm.ring = false;
 	const r = remoteCall(id, 'sync', body);
 	if (!r?.ok) { rm.acks = acks; return false; }
+	updNowSeen(r);
 	if (report) { rm.sent = ks; rm.sentKey = kstr; rm.due = 0; if (body.status.settings) rm.setKey = vk; }
 	if (r.needSettings) { rm.setKey = ''; rm.due = m; }   // 云端没存过设置：下一次带上
 	let did = remoteReply(id, r);

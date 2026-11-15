@@ -3,7 +3,7 @@
 'use strict';
 import * as fs from 'fs';
 
-const VERSION = '1.2.1';
+const VERSION = '1.3.0';
 const PKG = 'doti-kids-router', UPKG = 'doti-kids-router-updater';
 const cfg = {
 	dir: getenv('DOTI_UPD_DIR') || '/etc/doti-updater',
@@ -486,6 +486,19 @@ function watchdog() {
 	writeJson(f, w);
 }
 
+// 马上检查升级（云端经门铃让主程序写 upd.now，内容是管理员发起的时间）：没处理过的就马上报到，拿到新版本立即装（不等凌晨窗口）；
+// 报到成功才算处理过（记 updnow.json），失败照常退避重试
+const nowFlag = () => trim(fs.readfile(cfg.run + '/upd.now') ?? '');
+const nowSeen = () => '' + (readJson(F('updnow.json'), null)?.v ?? '');
+const nowWanted = () => { const v = nowFlag(); return v != '' && v != nowSeen(); };
+function installPending() {
+	const p = readJson(F('pending.json'), null);
+	if (!p || !lock()) return;
+	const o = signed(p);
+	if (!o || install(o) != 'retry') fs.unlink(F('pending.json'));
+	unlock();
+}
+
 function daemon() {
 	fs.mkdir(cfg.dir, 0700);
 	if (lock()) { finishPending(); unlock(); }
@@ -500,11 +513,17 @@ function daemon() {
 	while (true) {
 		const t = now(), id = identity(), lt = localtime(t), sec = lt.hour * 3600 + lt.min * 60 + lt.sec;
 		const c = readJson(F('checkin.json'), null);
-		const due = id.registered && ((catchUp && t >= catchUp) || (retryAt && t >= retryAt) ||
+		const want = nowWanted(), flag = want ? nowFlag() : '';
+		const due = id.registered && ((catchUp && t >= catchUp) || (retryAt && t >= retryAt) || (want && !retryAt) ||
 			(!retryAt && c?.day != today(t) && sec >= slot(id.id ?? '') && sec < 6 * 3600));
 		if (due) {
 			const r = checkinAndAct();
-			if (r) { fails = 0; retryAt = 0; catchUp = 0; if (r.updater && selfUpdate(r.updater)) return 0; }
+			if (r) {
+				fails = 0; retryAt = 0; catchUp = 0;
+				if (want) { writeJson(F('updnow.json'), { v: flag, at: t }); log('马上检查升级：已报到' + (r.target || r.updater ? '，有新版本，马上装' : '，没有新版本')); }
+				if (r.updater && selfUpdate(r.updater)) return 0;
+				if (want && fs.stat(F('pending.json'))) installPending();
+			}
 			else if (++fails <= length(RETRY)) retryAt = t + int(RETRY[fails - 1] * (0.7 + rnd() * 0.6));
 			else { fails = 0; retryAt = 0; catchUp = 0; }
 		}
@@ -520,7 +539,8 @@ function daemon() {
 		}
 		if (!fs.stat(cfg.tmp + '/doti-updater.lock')) watchdog();   // 升级、回滚时不看（那时本来就停着）
 		if (getenv('DOTI_UPD_ONCE')) break;
-		sleep(60000);
+		// 每分钟一圈；中间每 5 秒看一眼要不要马上检查升级，有就提前进下一圈
+		for (let i = 0; i < 12 && !nowWanted(); i++) sleep(5000);
 	}
 	return 0;
 }
