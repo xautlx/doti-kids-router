@@ -15,10 +15,27 @@ MTIME = int(os.environ.get('SOURCE_DATE_EPOCH') or 1767225600)
 FILES = os.path.join(HERE, 'files')
 VERSION = re.search(r"const VERSION = '([^']+)'", open(os.path.join(FILES, 'usr/sbin/doti')).read()).group(1)
 PKG, UPKG, FULL = 'doti-kids-router', 'doti-kids-router-updater', f'{VERSION}-1'
+# 发布日期（版本号里不带日期，显示成「版本（发布日期）」）：取仓库最后一次提交的时间（北京时间的日期），同一份代码哪里打包都一样（可复现）。
+# 在容器里打包（没有 git，如 GitHub Actions 的 Alpine）由外面传 DOTI_RELEASED_AT=$(git log -1 --format=%ct)；两样都没有就报错，不写错日期
+def _released():
+    import subprocess, datetime
+    t = os.environ.get('DOTI_RELEASED_AT')
+    if not t:
+        try:
+            t = subprocess.run(['git', '-C', HERE, 'log', '-1', '--format=%ct'], capture_output=True, text=True, check=True).stdout.strip()
+        except Exception:
+            t = ''
+    if not t.isdigit():
+        sys.exit('读不到发布日期：不在 git 仓库里时要传 DOTI_RELEASED_AT（最后一次提交的时间戳）')
+    return datetime.datetime.fromtimestamp(int(t), datetime.timezone(datetime.timedelta(hours=8))).strftime('%Y-%m-%d')
+RELEASED = _released()
 EXEC = ('usr/sbin/', 'usr/libexec/doti/', 'etc/init.d/', 'etc/uci-defaults/')
 CGI = '/usr/libexec/doti/cgi'
-PUB = ['hello', 'look']
-ADMIN = ['claim', 'backup', 'join', 'status', 'settings', 'today', 'wifi', 'usage', 'speed', 'device', 'parents', 'unbind', 'member', 'time']
+# 局域网接口的入口：照 cgi 里的接口表建（公开的 PUB、要票据的 ADMIN），只在 cgi 里写一份
+_cgi = open(os.path.join(FILES, 'usr/libexec/doti/cgi'), encoding='utf-8').read()
+def _api(name):
+    return re.findall(r"(\w+):", re.search(r"^const " + name + r" = \{(.*?)\};", _cgi, re.M | re.S).group(1))
+PUB, ADMIN = _api('PUB'), _api('ADMIN')
 
 CONTROL = f"""Package: {PKG}
 Version: {FULL}
@@ -242,6 +259,7 @@ def data_entries(upd, upd_name='doti-updater.ipk'):
         out.append(('./usr/share/doti/cloud-backup', (open(bp).read().strip() + '\n').encode(), 0o644))
     v = (VERSION + '\n').encode()
     out.append(('./usr/share/doti/version', v, 0o644))
+    out.append(('./usr/share/doti/released', (RELEASED + '\n').encode(), 0o644))
     ub = open(upd, 'rb').read()
     out.append(('./usr/share/doti/' + upd_name, ub, 0o644))
     size += len(ub)

@@ -3,21 +3,25 @@
 'use strict';
 import * as fs from 'fs';
 import { hmacSha256, sha256 } from 'doti.hmac';
-import { claim as listClaim, emptyList, indexOf as listIndex, isParent, join as listJoin, MAX_PARENTS, remove as listRemove, setProfile, toPublic, verify } from 'doti.auth';
-import { cleanText, defaults, merge as settingsMerge, restore as settingsRestore } from 'doti.settings';
+import { claim as listClaim, cleanAvatar, emptyList, indexOf as listIndex, isParent, join as listJoin, MAX_PARENTS, remove as listRemove, setProfile, toPublic, verify } from 'doti.auth';
+import { cleanText, defaults, merge as settingsMerge, NAME_MAX, restore as settingsRestore } from 'doti.settings';
 import { make as opsMake } from 'doti.ops';
 import { etc, mark, readJson, tmp, waitApplied, bumpGen, withLock, writeJson, writeSecret, writeText } from 'doti.store';
 import { follow as rootFollow } from 'doti.rootpw';
 import { devInfo, toApi as usageApi } from 'doti.usage';
-import { adminSsid, apply as wifiApply, bins as wifiBins, cmdsDisabled, cmdsKey, cmdsParent, ifacesOf, kidNet, load as wifiLoad, parentIfaces, parentTargets, randDigits, shq, state as wifiState, validPassword } from 'doti.wifi';
+import { inNet, lanAddr, logger } from 'doti.sys';
+import { make as accountMake } from 'doti.account';
+import { keyState, snapshotDiff, snapshotOf } from 'doti.remote';
+import { adminSsid, kidSsid, apply as wifiApply, bins as wifiBins, cmdsDisabled, cmdsKey, cmdsParent, ifacesOf, kidNet, load as wifiLoad, parentHasPassword, parentIfaces, parentTargets, randDigits, shq, state as wifiState, validPassword } from 'doti.wifi';
 
 const OPS = opsMake({ settings: { defaults, merge: settingsMerge }, store: { etc, readJson, withLock, writeJson },
 	wifi: { apply: wifiApply, bins: wifiBins, cmdsDisabled, cmdsKey, cmdsParent, adminSsid, parentTargets, parentIfaces, validPassword, ifacesOf, kidNet, load: wifiLoad, state: wifiState },
-	root: pw => rootFollow(pw, sha256), sha: sha256, now: () => getenv('DOTI_NOW') ? +getenv('DOTI_NOW') : time() });
+	root: pw => rootFollow(pw, sha256), sha: sha256, now: () => getenv('DOTI_NOW') ? +getenv('DOTI_NOW') : time(), bumpGen, afterParents: () => mark('backup'),
+	parents: { empty: emptyList, indexOf: listIndex, setProfile, cleanNick: x => cleanText(x, NAME_MAX), cleanAvatar } });
 const netKeys = OPS.netKeys, saveSettings = OPS.saveSettings, settingsOf = OPS.settingsNow, todayApply = OPS.today, wifiToggle = OPS.wifiToggle;
-const MAX_BODY = 16384, RESTORE_MAX = 163840, AVATAR_MAX = 8192, CLOCK_FIX = 120, STALE = 30;
+const MAX_BODY = 16384, RESTORE_MAX = 163840, CLOCK_FIX = 120, STALE = 30;
 const PUB = { hello: 'GET', look: 'GET' };
-const ADMIN = { claim: 'POST', backup: 'GET', join: 'POST', status: 'GET', settings: '*', today: 'POST',
+const ADMIN = { claim: 'POST', backup: 'GET', join: 'POST', status: 'GET', snapshot: 'GET', cmd: 'POST', settings: '*', today: 'POST',
 	wifi: '*', usage: 'GET', speed: 'GET', device: 'POST', parents: '*', unbind: 'POST', member: 'POST', time: 'POST' };
 const SLOW = { claim: true, join: true };
 const MSG = {
@@ -33,7 +37,7 @@ const HTTP = { BAD_REQUEST: 400, NOT_KID: 403, KEEP_ONE: 400, PASSWORD: 400, NO_
 
 function now() { return getenv('DOTI_NOW') ? +getenv('DOTI_NOW') : time(); }
 function env(k) { return getenv(k) ?? ''; }
-function log(msg) { system(['logger', '-t', 'doti-cgi', msg]); }
+const log = logger('doti-cgi');
 
 function send(code, obj) {
 	const reason = { '200': 'OK', '400': 'Bad Request', '401': 'Unauthorized', '403': 'Forbidden', '409': 'Conflict', '429': 'Too Many Requests', '500': 'Internal Server Error' };
@@ -45,19 +49,6 @@ function ok(obj) { return send(200, { ok: true, ...(obj ?? {}) }); }
 function fail(code, extra) { return send(HTTP[code] ?? 409, { ok: false, error: code, msg: MSG[code] ?? code, ...(extra ?? {}) }); }
 
 // ---------- 地址 ----------
-function ip4(s) {
-	const m = match(s ?? '', /^([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)$/);
-	if (!m) return null;
-	let n = 0;
-	for (let i = 1; i <= 4; i++) { if (+m[i] > 255) return null; n = n * 256 + +m[i]; }
-	return n;
-}
-function inNet(a, ip, prefix) {
-	const x = ip4(a), y = ip4(ip);
-	if (x == null || y == null) return false;
-	const span = 1 << (32 - prefix);
-	return int(x / span) == int(y / span);
-}
 function uciGet(k) {
 	const p = fs.popen((getenv('DOTI_UCI') || 'uci') + ' -q get ' + k);
 	if (!p) return null;
@@ -65,19 +56,11 @@ function uciGet(k) {
 	p.close();
 	return v || null;
 }
-function prefixOf(mask) {
-	const n = ip4(mask);
-	if (n == null) return 24;
-	let c = 0;
-	for (let i = 31; i >= 0; i--) { if (int(n / (1 << i)) % 2) c++; else break; }
-	return c;
-}
 function addrs() {
 	const a = readJson(tmp('addr.json'), null);
 	if (a?.lan?.ip) return a;
 	const nets = readJson(etc('nets.json'), []);
-	const p = split(split(trim(uciGet('network.lan.ipaddr') ?? ''), ' ')[0], '/');
-	return { lan: { ip: p[0], prefix: p[1] != null && match(p[1], /^[0-9]+$/) ? +p[1] : prefixOf(uciGet('network.lan.netmask')) },
+	return { lan: lanAddr(uciGet('network.lan.ipaddr'), uciGet('network.lan.netmask')),
 		kids: map(nets, n => ({ key: n.key, ip: n.ip, prefix: 24 })) };
 }
 function sourceNet(a, remote) {
@@ -138,8 +121,8 @@ function offline(t) {
 	const c = readJson(tmp('cloud.json'), null);
 	return c?.lastOk ? t - c.lastOk > 86400 : false;
 }
-function memberUntil() { return readJson(etc('member.json'), null)?.x; }
-function cleanAvatar(a) { return type(a) == 'string' && length(a) <= AVATAR_MAX && substr(a, 0, 11) == 'data:image/' ? a : ''; }
+const ACC = accountMake({ store: { etc, readJson, writeJson, withLock }, verify, hmac: hmacSha256, bumpGen, now, log });
+const memberUntil = ACC.memberUntil;
 function savedParents(list) { writeJson(etc('parents.json'), list); mark('backup'); bumpGen(); }
 
 // ---------- 接口 ----------
@@ -171,7 +154,7 @@ H.claim = (c) => {
 	if (!length(ifs)) return fail('NO_WIFI');
 	const r = withLock(() => {
 		if (length(parentsList().parents)) return [null, 'CLAIMED'];
-		const list = listClaim(emptyList(), c.who, cleanText(b.nick, 10), cleanAvatar(b.avatar), c.now)[0];
+		const list = listClaim(emptyList(), c.who, cleanText(b.nick, NAME_MAX), cleanAvatar(b.avatar), c.now)[0];
 		let s = settingsNow(c.id);
 		if (rs) {
 			s = settingsRestore(s, rs.settings, keys, code);
@@ -179,13 +162,13 @@ H.claim = (c) => {
 				if (length(list.parents) >= MAX_PARENTS) break;
 				if (p?.o == c.who && type(p.at) == 'int') list.parents[0].at = p.at;   // 绑定的人以前就是家长：加入时间照旧
 				if (type(p?.o) != 'string' || !length(p.o) || isParent(list, p.o)) continue;
-				push(list.parents, { o: p.o, nick: cleanText(p.nick, 10), avatar: cleanAvatar(p.avatar), at: type(p.at) == 'int' ? p.at : c.now, by: type(p.by) == 'string' ? p.by : c.who });
+				push(list.parents, { o: p.o, nick: cleanText(p.nick, NAME_MAX), avatar: cleanAvatar(p.avatar), at: type(p.at) == 'int' ? p.at : c.now, by: type(p.by) == 'string' ? p.by : c.who });
 			}
 		}
 		else {
 			const labels = type(b.labels) == 'array' ? b.labels : [];
 			s = { ...s, networks: map(s.networks, n => {   // 刚绑定，还没人读过设置，版本号不用加
-				const i = index(b.keys, n.key), name = i >= 0 ? cleanText(labels[i], 10) : '';
+				const i = index(b.keys, n.key), name = i >= 0 ? cleanText(labels[i], NAME_MAX) : '';
 				return name ? { ...n, name } : n;
 			}) };
 		}
@@ -200,7 +183,7 @@ H.claim = (c) => {
 	const cmds = [];
 	for (let k in on) for (let x in cmdsDisabled(ifacesOf(o, kidNet(k)), true)) push(cmds, x);
 	for (let k in keys) for (let f in ifacesOf(o, kidNet(k))) {
-		if (code != c.id.code) push(cmds, 'set wireless.' + f.sec + '.ssid=' + shq('DOTI-' + code + '-0' + substr(k, 1)));
+		if (code != c.id.code) push(cmds, 'set wireless.' + f.sec + '.ssid=' + shq(kidSsid(code, k)));
 		if (validPassword(kidPw[k])) push(cmds, 'set wireless.' + f.sec + '.key=' + shq(kidPw[k]));
 	}
 	for (let x in cmdsParent(ifs, b.password, code)) push(cmds, x);
@@ -281,6 +264,34 @@ function noteWho(c, keys, kind) {
 	writeJson(tmp('who.json'), w);
 }
 
+// 路由器快照（ICD §2.9）：常驻程序每圈写的 snapshot.json；它没在跑（文件旧了）就现拼一份。?have=<各段摘要 JSON> 只回变了的段
+function snapNow(c) {
+	const s = readJson(tmp('snapshot.json'), null), st = fs.stat(tmp('snapshot.json'));
+	if (s && st && c.now - st.mtime <= STALE) return s;
+	const status = statusNow(c), set = settingsNow(c.id), b = wifiBins(), o = wifiLoad(b), keys = netKeys(), on = wifiState(b, keys) ?? {};
+	const wifi = { kids: map(keys, k => ({ key: k, ssid: ifacesOf(o, kidNet(k))[0]?.ssid ?? '', on: !!on[k] })), parent: { ssid: adminSsid(c.id.code), set: parentHasPassword(o, c.id.code) } };
+	return snapshotOf({ at: c.now, router: status.router, networks: status.networks }, set, wifi, toPublic(parentsList(), ''), keyState(status, set, '', OPS.pwAtOf()));
+}
+function haveOf() { const q = query('have'); if (!q) return null; try { return json(replace(q, /%([0-9A-Fa-f][0-9A-Fa-f])/g, (m, h) => chr(hex(h)))); } catch (e) { return null; } }
+H.snapshot = (c) => ok({ snapshot: snapshotDiff(snapNow(c), haveOf()), me: listIndex(parentsList(), c.who) + 1 });
+
+// 家长命令（ICD §2.10）：和远程命令同一个格式 { type, args, base? }、同一套执行（ops.cmd）。成了等常驻程序重读、回新快照；
+// 没成按错误码回（STALE 是被别处更新的临时安排顶替，CONFLICT 是规则版本对不上）
+const CMD_ERR = { superseded: 'STALE', keep_one: 'KEEP_ONE', password: 'PASSWORD', no_wifi: 'NO_WIFI', internal: 'INTERNAL' };
+const CMD_WHO = { settings: 'r', wifiToggle: 'w' };
+H.cmd = (c) => {
+	const b = c.body ?? {};
+	const r = OPS.cmd(b.type, b.args, { code: c.id.code, by: c.who, at: null, base: b.base, now: c.now });
+	if (r[0] == 'expired') return fail('LATE');
+	if (r[0] != 'done') return fail(CMD_ERR[r[1]?.reason] ?? 'BAD_REQUEST', { result: r[1] });
+	const keys = b.type == 'settings' ? map(b.args?.networks ?? [], n => n?.key) : [b.args?.key];
+	if (CMD_WHO[b.type]) noteWho(c, keys, CMD_WHO[b.type]);
+	const applied = waitApplied(bumpGen(), c.now);
+	mark('report');
+	if (length(r[1]?.conflicts ?? [])) return fail('CONFLICT', { conflicts: r[1].conflicts, snapshot: snapshotDiff(snapNow(c), null) });
+	return ok({ result: r[1], applied, snapshot: snapshotDiff(snapNow(c), null), me: listIndex(parentsList(), c.who) + 1 });
+};
+
 H.settings = (c) => {
 	if (c.method == 'GET') return ok({ settings: settingsNow(c.id) });
 	const m = saveSettings(c.id.code, c.body, c.now);
@@ -327,7 +338,7 @@ H.speed = (c) => {
 H.device = (c) => {
 	const b = c.body, mac = lc(b.mac ?? '');
 	if (!match(mac, /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/) || type(b.name) != 'string') return fail('BAD_REQUEST');
-	const name = trim(cleanText(b.name, 10)), host = deviceInfo()(mac).host;
+	const name = trim(cleanText(b.name, NAME_MAX)), host = deviceInfo()(mac).host;
 	const r = withLock(() => {
 		const names = readJson(etc('devnames.json'), null) ?? {};
 		if (name) names[mac] = { name, host };
@@ -347,7 +358,7 @@ H.parents = (c) => {
 	const r = withLock(() => {
 		const list = parentsList();
 		let x = null;
-		if (b.op == 'profile') x = setProfile(list, c.who, b.nick != null ? cleanText(b.nick, 10) : null, b.avatar != null ? cleanAvatar(b.avatar) : null);
+		if (b.op == 'profile') x = setProfile(list, c.who, b.nick != null ? cleanText(b.nick, NAME_MAX) : null, b.avatar != null ? cleanAvatar(b.avatar) : null);
 		else if (b.op == 'remove') {
 			const p = list.parents[(+b.idx || 0) - 1];
 			if (!p || p.o === c.who) return [list, 'BAD_REQUEST'];
@@ -374,13 +385,11 @@ H.unbind = (c) => {
 };
 
 H.member = (c) => {
-	const v = verify(hmacSha256, c.id.key, c.body.credential, 'member', c.id.id, { now: c.now, clockOk: clockOk(), offline: offline(c.now) });
-	if (v[1]) return fail(v[1] == 'expired' ? 'EXPIRED' : 'BAD_REQUEST');
-	writeJson(etc('member.json'), { x: v[0].x, cred: c.body.credential, at: c.now });
+	const r = ACC.memberSet(c.id, c.body.credential, { now: c.now, clockOk: clockOk(), offline: offline(c.now) });
+	if (r[1]) return fail(r[1] == 'expired' ? 'EXPIRED' : 'BAD_REQUEST');
 	// 家长在家开通时小程序顺手告诉路由器总开关已打开，不用等第二天报到
-	if (c.body.remote === true) writeJson(etc('remote.json'), { on: true, at: c.now });
-	bumpGen();
-	return ok({ member: v[0].x });
+	if (c.body.remote === true && ACC.remoteFlag(true)) bumpGen();
+	return ok({ member: r[0] });
 };
 
 H.time = (c) => {

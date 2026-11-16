@@ -5,7 +5,10 @@ export const SURF = [0, 15, 30, 45, 60, 75, 90, 120, 240, 1440];
 export const LIMIT = [15, 30, 45, 60, 75, 90, 120, 240, 1440];
 export const DAILY = [0, 30, 60, 90, 120, 180, 240, 480, 720, 960];
 export const CATEGORIES = ['game', 'shortvideo', 'film'];   // 游戏、短视频和直播、影视
-const NET_KEYS = ['k1', 'k2', 'k3'];
+// 孩子网络（最多三个，k1 → doti1 → DOTI-<编号>-01 → 屏蔽 DNS 5390；init.d、80-doti 里也按这三个写，order_check 核对）
+export const NET_KEYS = ['k1', 'k2', 'k3'];
+// 称呼、网络名、时段名最长几个字
+export const NAME_MAX = 10;
 export const DEFAULT_NAMES = { k1: '大宝的网络', k2: '二宝的网络', k3: '三娃的网络' };
 export function defaultRouterName(code) { return '一点守护路由器 ' + (code || ''); };
 const MAX_WIN = 8, MAX_CUSTOM = 200;
@@ -96,7 +99,7 @@ function checkWindows(ws) {
 			seen[d] = true;
 		}
 		if (!isTime(w.start) || !isTime(w.end) || w.start == w.end) return [null, 'windows.time'];
-		push(out, { id: w.id, kind: w.kind, name: cleanText(w.name, 10), days: sort(map(w.days, x => x)), start: w.start, end: w.end });
+		push(out, { id: w.id, kind: w.kind, name: cleanText(w.name, NAME_MAX), days: sort(map(w.days, x => x)), start: w.start, end: w.end });
 	}
 	return [out, null];
 }
@@ -134,7 +137,7 @@ export function checkNet(n) {
 	if (w[1]) return [null, w[1]];
 	const b = checkNetBlock(n.block ?? {});
 	if (b[1]) return [null, b[1]];
-	const name = cleanText(n.name, 10);
+	const name = cleanText(n.name, NAME_MAX);
 	return [{ key: n.key, ver: 0, name: name || DEFAULT_NAMES[n.key] || n.key, template: n.template || '',
 		surfMin: n.surfMin, limitMin: n.limitMin, dailyMaxMin: n.surfMin == 1440 ? 0 : n.dailyMaxMin, windows: w[0], limitKbps: kbps, lanFree: lan, kidView: kv, allowDoh: doh, block: b[0] }, null];
 };

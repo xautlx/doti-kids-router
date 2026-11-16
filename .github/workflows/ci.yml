@@ -19,7 +19,7 @@ jobs:
       # ipk 和 apk（OpenWrt 25.x）一起打；apk 包要 apk-tools 3 的 apk mkpkg，在 Alpine 容器里打
       - name: Package
         run: |
-          docker run --rm -v "$PWD":/w -w /w alpine:3.24 sh -c "apk add -q python3 && python3 build.py --apk && chown -R $(id -u):$(id -g) dist"
+          docker run --rm -e DOTI_RELEASED_AT="$(git log -1 --format=%ct)" -v "$PWD":/w -w /w alpine:3.24 sh -c "apk add -q python3 && python3 build.py --apk && chown -R $(id -u):$(id -g) dist"
           ls -l dist
 
       # 打标签时：标签必须和程序里的版本一致，再发布到 Releases

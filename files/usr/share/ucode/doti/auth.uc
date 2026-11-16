@@ -2,6 +2,9 @@
 'use strict';
 
 export const MAX_PARENTS = 10;
+// 家长头像：data:image/… 的字符串，最长 8192 字符；不合格的当作没有
+export const AVATAR_MAX = 8192;
+export function cleanAvatar(a) { return type(a) == 'string' && length(a) <= AVATAR_MAX && substr(a, 0, 11) == 'data:image/' ? a : ''; };
 const MAX_JOINED = 50;
 const OFFLINE_GRACE = 7 * 86400;
 

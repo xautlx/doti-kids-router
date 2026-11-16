@@ -32,7 +32,7 @@ return view.extend({
 				E('h3', {}, '安装状态'),
 				table([
 					row('一点守护服务', good(d.running, '运行中', '没在运行')),
-					row('主程序版本', d.version || '—'),
+					row('主程序版本', d.version ? d.version + (d.released ? '（' + d.released + '）' : '') : '—'),
 					row('升级程序版本', d.updater || '没装'),
 					row('路由器编号', d.code || '—'),
 					row('云端登记', good(d.registered, '已登记', '还没登记（路由器联网后自动登记）')),

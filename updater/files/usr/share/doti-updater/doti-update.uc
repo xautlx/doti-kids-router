@@ -3,7 +3,7 @@
 'use strict';
 import * as fs from 'fs';
 
-const VERSION = '1.3.1';
+const VERSION = '2.0.0';
 const PKG = 'doti-kids-router', UPKG = 'doti-kids-router-updater';
 const cfg = {
 	dir: getenv('DOTI_UPD_DIR') || '/etc/doti-updater',
@@ -443,15 +443,13 @@ function checkin() {
 	lastErr = null;
 	if (!id.registered) return null;
 	const last = readJson(F('last.json'), null), m = readJson(cfg.etc + '/member.json', null);
-	const sets = readJson(cfg.etc + '/sets.json', null)?.sets;
 	const r = post('checkin', { version: installed(), updater: VERSION, lastUpgrade: last && !last.sent ? { 'from': last.prev, to: last.to, result: last.result, reason: last.reason, at: last.at } : null,
-		claimed: claimed(), kidNets: kidNets(), memberUntil: m?.x ?? 0, haveCurrent: haveCurrent(), env: envInfo(), ...(type(sets) == 'string' ? { sets } : {}) });
+		claimed: claimed(), kidNets: kidNets(), memberUntil: m?.x ?? 0, haveCurrent: haveCurrent(), env: envInfo() });
 	lastErr = r?.error ?? null;
 	if (r?.error == 'CLOCK') { clockFix(r.now); return null; }
 	if (r?.error == 'NOT_REGISTERED') { fs.mkdir(cfg.run, 0700); fs.writefile(cfg.run + '/unregistered.now', '' + now()); log('云端没有这台的记录，通知主程序重新登记'); return null; }
 	if (!r?.ok) return null;
 	clockFix(r.now);
-	if (type(sets) == 'string' && readJson(cfg.etc + '/sets.json', null)?.sets === sets) fs.unlink(cfg.etc + '/sets.json');
 	writeJson(F('checkin.json'), { at: now(), day: today(now()), ok: true });
 	if (last && !last.sent) { last.sent = true; writeJson(F('last.json'), last); }
 	inbox(r);

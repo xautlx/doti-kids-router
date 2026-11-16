@@ -14,6 +14,8 @@ function sh(cmd) {
 }
 // 没认领时家长 WiFi 用固定临时名，第一次设密码时改成带编号的名字
 export function adminSsid(code) { return 'DOTI-' + code + '-ADMIN'; };
+// 孩子 WiFi 名：DOTI-<编号>-0<N>（k1 → 01）
+export function kidSsid(code, key) { return 'DOTI-' + code + '-0' + substr(key, 1); };
 export function shq(s) { return "'" + replace(s, "'", "'\\''") + "'"; };
 export function kidNet(key) { return 'doti' + substr(key, 1); };
 

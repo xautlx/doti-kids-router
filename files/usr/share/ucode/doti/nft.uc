@@ -2,19 +2,24 @@
 'use strict';
 import * as fs from 'fs';
 
+// 一点守护的三张表：统计（base）、限速（limit）、屏蔽 DNS（dns）；升级程序、build.py 卸载脚本里也有这三个名字（order_check 核对）
+export const TABLES = { base: 'doti', limit: 'doti_limit', dns: 'doti_dns' };
+
 // 家里的内网地址（打开「家里局域网不计时、不限速」的网络，访问这些不计、不限）
-export const PRIVATE = '{ 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 }';
+const PRIVATE_NETS = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'];
+export const PRIVATE = '{ ' + join(', ', PRIVATE_NETS) + ' }';
 
 // 不计时、不限速的目标地址：lanFree 的网络加内网，再加不限速地址 free（云端给的 IP 列表：云端自己等）
 function freeDst(lanFree, free) {
-	const a = lanFree ? ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'] : [];
+	const a = lanFree ? [...PRIVATE_NETS] : [];
 	for (let ip in (free ?? [])) push(a, ip);
 	return a;
 }
 
 // 统计表；lanFree 的网络只统计和内网以外的流量；不限速地址 free 的流量都不统计
 export function baseRuleset(groups, free) {
-	let s = 'table inet doti\ndelete table inet doti\ntable inet doti {\n';
+	const t = TABLES.base;
+	let s = 'table inet ' + t + '\ndelete table inet ' + t + '\ntable inet ' + t + ' {\n';
 	for (let i = 0; i < length(groups); i++)
 		s += sprintf('\tset up%d { type ipv4_addr; flags dynamic; counter; timeout 1h; }\n\tset dn%d { type ipv4_addr; flags dynamic; counter; timeout 1h; }\n', i, i);
 	s += '\tchain stat {\n\t\ttype filter hook forward priority 0; policy accept;\n';
@@ -27,12 +32,17 @@ export function baseRuleset(groups, free) {
 	return s + '\t}\n}\n';
 };
 
+// 限速时 UDP 每秒最多放行的包数（上下行各算，整个网络合计）：实时对战游戏每秒要来回二三十个包，总流量却只有几 KB/s，
+// 光限总流量管不住；压住 UDP 包频游戏就玩不了，微信文字、图片走 TCP 不受影响。DNS（53）和 QUIC（443）不压
+const UDP_PPS = 5;
+
 // 限速表：nets 是正在限速的网络 { key, dev, kbps, lanFree }；kbps 为 0 就断网；lanFree 的网络访问内网照常放行；
 // 不限速地址 free（云端给的 IP 列表）的 HTTPS 一律放行：限速、断网时孩子也能找家长要时间、拍照上传、看家长的回应
 export function limitRuleset(nets, free) {
-	let s = 'table inet doti_limit\ndelete table inet doti_limit\n';
+	const t = TABLES.limit;
+	let s = 'table inet ' + t + '\ndelete table inet ' + t + '\n';
 	if (!length(nets)) return s;
-	s += 'table inet doti_limit {\n\tchain kidcap {\n\t\ttype filter hook forward priority -200; policy accept;\n';
+	s += 'table inet ' + t + ' {\n\tchain kidcap {\n\t\ttype filter hook forward priority -200; policy accept;\n';
 	for (let n in nets) {
 		if (n.lanFree) s += sprintf('\t\tiifname "%s" ip daddr %s accept\n\t\toifname "%s" ip saddr %s accept\n', n.dev, PRIVATE, n.dev, PRIVATE);
 		if (length(free ?? [])) {
@@ -40,6 +50,9 @@ export function limitRuleset(nets, free) {
 			s += sprintf('\t\tiifname "%s" ip daddr %s tcp dport 443 accept\n\t\toifname "%s" ip saddr %s tcp sport 443 accept\n', n.dev, set, n.dev, set);
 		}
 		const kb = max(1, int(n.kbps / 8)), burst = kb * 10;
+		if (n.kbps > 0)
+			s += sprintf('\t\tiifname "%s" udp dport != { 53, 443 } limit rate over %d/second burst %d packets counter drop comment "%s_udp"\n', n.dev, UDP_PPS, UDP_PPS, n.key) +
+				sprintf('\t\toifname "%s" udp sport != { 53, 443 } limit rate over %d/second burst %d packets counter drop comment "%s_udp"\n', n.dev, UDP_PPS, UDP_PPS, n.key);
 		for (let dir in ['iifname', 'oifname'])
 			s += n.kbps > 0 ? sprintf('\t\t%s "%s" limit rate over %d kbytes/second burst %d kbytes counter drop comment "%s_drop"\n', dir, n.dev, kb, burst, n.key)
 				: sprintf('\t\t%s "%s" counter drop comment "%s_drop"\n', dir, n.dev, n.key);
@@ -74,9 +87,10 @@ export function freeIpList(r) {
 // 家长关了加密 DNS 拦截的网络不在里面（没传 guard 就是全拦）
 export function dnsRuleset(devs, port, dohIps, guard) {
 	// port：数字（都转到同一个），或 { 网卡: 端口 }（每个孩子网络一个屏蔽 DNS）
-	let s = 'table inet doti_dns\ndelete table inet doti_dns\n';
+	const t = TABLES.dns;
+	let s = 'table inet ' + t + '\ndelete table inet ' + t + '\n';
 	if (!length(devs)) return s;
-	s += 'table inet doti_dns {\n';
+	s += 'table inet ' + t + ' {\n';
 	if (length(dohIps)) s += sprintf('\tset doh { type ipv4_addr; elements = { %s } }\n', join(', ', dohIps));
 	s += '\tchain redir {\n\t\ttype nat hook prerouting priority dstnat - 1; policy accept;\n';
 	const byPort = {};
@@ -100,7 +114,7 @@ export function dnsRuleset(devs, port, dohIps, guard) {
 	return s + '\t}\n}\n';
 };
 
-export const removeAll = 'table inet doti\ndelete table inet doti\ntable inet doti_limit\ndelete table inet doti_limit\ntable inet doti_dns\ndelete table inet doti_dns\n';
+export const removeAll = join('', map(values(TABLES), t => 'table inet ' + t + '\ndelete table inet ' + t + '\n'));
 
 // `nft -j list table inet doti` 的输出 → { k1: { bytes, pkts, up, dn } }
 export function parseCounters(text) {
@@ -142,11 +156,10 @@ export function apply(bin, tmp, text) {
 
 // `nft -j list table inet <表>` 的原文
 export function listJSON(bin, table) {
-	const p = fs.popen(sprintf('%s -j list table inet %s 2>/dev/null', bin, table ?? 'doti'), 'r');
+	const p = fs.popen(sprintf('%s -j list table inet %s 2>/dev/null', bin, table ?? TABLES.base), 'r');
 	if (!p) return '';
 	const t = p.read('all');
 	p.close();
 	return t ?? '';
 };
 
-export function counters(bin) { return parseCounters(listJSON(bin)); };

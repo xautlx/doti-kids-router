@@ -111,5 +111,56 @@ export function make(d) {
 		return [ifs[0].ssid, null];
 	}
 
-	return { netKeys, settingsNow, today, saveSettings, wifiToggle, setPassword, wifiKeys, pwStamp, pwAtOf };
+	// 改家长名单（加锁；版本变了才写、通知常驻程序重读，d.afterParents 有就再调一下）。fn(L) 改名单，可以回错误码
+	function editParents(fn, now) {
+		const r = withLock(() => {
+			const L = readJson(etc('parents.json'), null) ?? d.parents.empty(), before = L.ver;
+			const e = fn(L);
+			if (L.ver != before) writeJson(etc('parents.json'), L);
+			return [L, e ?? null, L.ver != before];
+		}, now ?? (d.now ? d.now() : time()));
+		if (r[1]) return [null, 'INTERNAL'];
+		if (r[0][2]) { d.bumpGen(); if (d.afterParents) d.afterParents(); }
+		return [r[0][0], r[0][1]];
+	}
+
+	// 一条家长命令（ICD §2.10、§4.4）：远程命令和局域网 POST /doti/cmd 都走这里，回 [state, result]。state：done / rejected / expired，
+	// rejected 的 result.reason 是小写的错误码（superseded 是被别处更新的临时安排顶替）。
+	// x = { code 路由器编号, by 发起人 openid, at 远程命令的发出时间（云端时间，局域网为 null）, base 改设置的版本（远程命令放在外面）, now }
+	const rejected = reason => ['rejected', { reason }];
+	const CMDS = {
+		today: (a, x) => {
+			const L = readJson(etc('parents.json'), null) ?? d.parents.empty();
+			const r = today(a, d.parents.indexOf(L, x.by) + 1, x.now, x.at);
+			if (r[1] == 'LATE') return ['expired', {}];
+			return r[1] ? rejected(r[1] == 'STALE' ? 'superseded' : lc(r[1])) : ['done', {}];
+		},
+		settings: (a, x) => {
+			const m = saveSettings(x.code, { ...a, base: x.base ?? a.base ?? {} }, x.now);
+			if (m.err) return rejected(m.err == 'INTERNAL' ? 'internal' : 'bad');
+			return ['done', length(m.conflicts) ? { conflicts: m.conflicts } : {}];
+		},
+		// 下了开 / 关就回报；热点真的开好要十几秒，实际状态随下一次状态（快照）报上去
+		wifiToggle: (a) => { const e = wifiToggle(a.key, a.on); return e ? rejected(lc(e)) : ['done', {}]; },
+		// 设 WiFi 密码（孩子网络 k1–k3 或家长 WiFi admin）：回报里不带密码
+		wifiPw: (a, x) => { const r = setPassword(a.key, a.password, x.code); return r[1] ? rejected(lc(r[1])) : ['done', { ssid: r[0] }]; },
+		// 改称呼头像：不带 idx 是改自己的称呼头像；带 idx（名单里第几位，从 1 起）是给别的家人改称呼，头像只能本人换
+		profile: (a, x) => {
+			const av = a.avatar, other = a.idx != null;
+			if (other && (type(a.idx) != 'int' || a.idx < 1 || a.nick == null || av != null)) return rejected('bad');
+			if (av != null && d.parents.cleanAvatar(av) == '') return rejected('bad');
+			const r = editParents(L => {
+				const p = other ? L.parents[a.idx - 1] : null;
+				if (other && !p) return 'BAD';
+				return d.parents.setProfile(L, other ? p.o : x.by, a.nick != null ? d.parents.cleanNick(a.nick) : null, av)[1];
+			}, x.now);
+			return r[1] ? rejected(lc(r[1])) : ['done', {}];
+		},
+	};
+	function cmd(t, a, x) {
+		const f = CMDS[t];
+		return f ? f(type(a) == 'object' ? a : {}, x) : rejected('bad');
+	}
+
+	return { netKeys, settingsNow, today, saveSettings, wifiToggle, setPassword, wifiKeys, pwStamp, pwAtOf, editParents, cmd };
 };

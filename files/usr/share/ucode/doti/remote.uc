@@ -40,3 +40,35 @@ export function remember(rec, item) {
 	while (length(list) > CMD_KEEP) shift(list);
 	return { list };
 };
+
+// ---------- 路由器快照（三端同一份结构，ICD §2.9）：在家局域网 GET /doti/snapshot、远程同步上报、小程序缓存都是它 ----------
+// { v, at, tags, router, networks, settings, wifi, parents }：五段各一个摘要 tags，摘要相同就是没变；只放路由器说了算的事，不放任何密码
+export const SNAP_V = 1;
+export const SNAP_PARTS = ['router', 'networks', 'settings', 'wifi', 'parents'];
+// 32 位 FNV-1a，十六进制 8 位（只用来比较变没变）
+export function fnv(s) {
+	let h = 0x811c9dc5;
+	for (let i = 0; i < length(s); i++) { h = h ^ ord(s, i); h = (h * 0x01000193) & 0xffffffff; }
+	return sprintf('%08x', h);
+};
+// status：常驻程序这一圈的状态 { at, router, networks }；ks：keyState（网络段的摘要按它算，剩余秒数、已用分钟、网速这些每圈都变的不算）
+// wifi：{ kids: [{ key, ssid, on }], parent: { ssid, set } }；parents：家长名单的公开部分（toPublic，不带 me）
+export function snapshotOf(status, settings, wifi, parents, ks) {
+	const J = x => sprintf('%J', x);
+	return { v: SNAP_V, at: status.at, router: status.router, networks: status.networks, settings, wifi, parents,
+		tags: { router: fnv(J(status.router)), networks: fnv(J([ks?.networks, ks?.router])), settings: fnv(J(ks?.vers)), wifi: fnv(J(wifi)), parents: fnv(J(parents)) } };
+};
+// 对方手里有的摘要 have（{ 段: 摘要 }）→ 只回变了的段；全都一样回 { same: true }
+export function snapshotDiff(snap, have) {
+	const out = { v: snap.v, at: snap.at, tags: snap.tags };
+	let changed = false;
+	for (let p in SNAP_PARTS) if (type(have) != 'object' || have[p] != snap.tags[p]) { out[p] = snap[p]; changed = true; }
+	if (!changed) out.same = true;
+	return out;
+};
+// 上报给云端用的：网络段去掉网速（每圈都变、远程看没意义）
+export function snapshotReport(snap, have) {
+	const d = snapshotDiff(snap, have);
+	if (d.networks) d.networks = map(d.networks, n => { const x = { ...n }; delete x.speed; return x; });
+	return d;
+};

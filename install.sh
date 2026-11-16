@@ -1,6 +1,7 @@
 #!/bin/sh
 # 一点守护安装脚本：判断系统 → 下载最新版对应格式的包（opkg 用 ipk，apk 用 apk）→ 安装
 #   cd /tmp && wget -O install.sh https://gitee.com/xautlx/doti-kids-router/raw/main/install.sh && sh install.sh
+#   出厂预装：DOTI_PREINSTALL=1 DOTI_ROOTPW=<出厂默认 root 密码> sh install.sh
 LATEST='https://kids-router-api.doti.top/doti_rt?dl=latest'
 REPO='xautlx/doti-kids-router'
 MIRRORS="${DOTI_MIRRORS:-https://gitee.com/$REPO/releases/download
@@ -74,14 +75,16 @@ done
 # 5 安装：先不联网装（依赖系统都自带时最快）；缺依赖（一般只缺门铃组件）再联网补。
 # 联网先试国内镜像，用临时配置（只对这次安装生效，不改系统的软件源），限时；不通再用系统原来的软件源。
 # 不按地域判断：路由器不知道自己在哪，按实际连不连得上来选，海外用户镜像不通就自动退回官方源
-MIRROR=https://mirrors.tuna.tsinghua.edu.cn/openwrt
+# 国内镜像按顺序试：清华（新版本全）、阿里云（还留着 22.03.x，清华等已经下架）。哪个能更新索引就用哪个
+MIRRORS_CN="https://mirrors.tuna.tsinghua.edu.cn/openwrt https://mirrors.aliyun.com/openwrt"
+MIRROR=""
 VIA=""
 # 限时执行：软件源连不上时 opkg update / apk 可能卡很久
 lim() { s=$1; shift; "$@" & p=$!; ( sleep "$s"; kill "$p" 2>/dev/null ) & w=$!; wait "$p"; r=$?; kill "$w" 2>/dev/null; return $r; }
 # opkg 的临时配置：软件源换成镜像（OPKG_CONF_DIR 让它不读系统的 /etc/opkg/*.conf），索引放临时目录
-mkopkg() {
-	mkdir -p "$TMP/feeds" "$TMP/lists"
-	for f in /etc/opkg/*.conf; do [ -f "$f" ] && sed "s#https*://downloads.openwrt.org#$MIRROR#" "$f" > "$TMP/feeds/${f##*/}"; done
+mkopkg() {   # mkopkg 镜像地址
+	rm -rf "$TMP/feeds" "$TMP/lists"; mkdir -p "$TMP/feeds" "$TMP/lists"
+	for f in /etc/opkg/*.conf; do [ -f "$f" ] && sed "s#https*://downloads.openwrt.org#$1#" "$f" > "$TMP/feeds/${f##*/}"; done
 	sed "s#^lists_dir .*#lists_dir ext $TMP/lists#" /etc/opkg.conf > "$TMP/opkg.conf"
 	grep -q '^lists_dir' "$TMP/opkg.conf" || echo "lists_dir ext $TMP/lists" >> "$TMP/opkg.conf"
 }
@@ -89,18 +92,23 @@ mo() { OPKG_CONF_DIR="$TMP/feeds" opkg -f "$TMP/opkg.conf" "$@"; }
 inst() {
 	if [ "$PM" = opkg ]; then
 		# 临时配置的索引目录是空的：这一步不联网，系统已有的官方源索引也不会被用来下载（那样在国内很慢）
-		mkopkg
+		mkopkg "${MIRRORS_CN%% *}"
 		mo install "$TMP/$FILE" > "$TMP/log" 2>&1 && { cat "$TMP/log"; return 0; }
 		say "系统缺少依赖，联网安装（先用国内镜像）……"
-		if lim 90 mo update >/dev/null 2>&1 && mo install "$TMP/$FILE"; then VIA=mirror; return 0; fi
+		for m in $MIRRORS_CN; do
+			mkopkg "$m"
+			if lim 90 mo update >/dev/null 2>&1 && mo install "$TMP/$FILE"; then VIA=mirror; MIRROR=$m; return 0; fi
+		done
 		say "国内镜像不通，改用系统的软件源……"
 		lim 180 opkg update >/dev/null 2>&1 || return 2
 		opkg install "$TMP/$FILE"; return
 	fi
 	if apk add --allow-untrusted --no-network "$TMP/$FILE" > "$TMP/log" 2>&1; then grep -v "^WARNING: opening from cache" "$TMP/log"; return 0; fi
 	say "系统缺少依赖，联网安装（先用国内镜像）……"
-	cat /etc/apk/repositories.d/*.list 2>/dev/null | sed "s#https*://downloads.openwrt.org#$MIRROR#" > "$TMP/repos"
-	if [ -s "$TMP/repos" ] && lim 120 apk add --allow-untrusted --repositories-file "$TMP/repos" "$TMP/$FILE"; then VIA=mirror; return 0; fi
+	for m in $MIRRORS_CN; do
+		cat /etc/apk/repositories.d/*.list 2>/dev/null | sed "s#https*://downloads.openwrt.org#$m#" > "$TMP/repos"
+		if [ -s "$TMP/repos" ] && lim 120 apk add --allow-untrusted --repositories-file "$TMP/repos" "$TMP/$FILE"; then VIA=mirror; MIRROR=$m; return 0; fi
+	done
 	say "国内镜像不通，改用系统的软件源……"
 	lim 240 apk add --allow-untrusted "$TMP/$FILE"
 }
@@ -112,6 +120,12 @@ if [ -n "$old" ]; then
 	say "换成新的软件包名，先卸掉旧包（设置和绑定保留）：$old"
 	if [ "$PM" = apk ]; then apk del $old >/dev/null 2>&1; else opkg remove $old >/dev/null 2>&1; fi
 fi
+# 预装（出厂时我们自己装）：DOTI_PREINSTALL=1 先放预装标记，第一次安装就按预装处理——主 LAN 换成 10.x 网段；
+# 再给 DOTI_ROOTPW（出厂默认 root 密码，8 位以上）时写进标记（只有 root 能读），没人绑定时 root 用它，绑定后换成家长 WiFi 密码。
+# 标记只让本机更严，不带任何服务期等权益（权益只认云端登记）
+if [ "${DOTI_PREINSTALL:-}" = 1 ]; then
+	mkdir -p /etc/doti && (umask 077; printf '%s\n' "${DOTI_ROOTPW:-}" > /etc/doti/preinstall) && chmod 600 /etc/doti/preinstall && say "预装模式：已放预装标记"
+fi
 say "开始安装……"
 inst; r=$?
 [ $r = 2 ] && die "软件源连不上：国内镜像和系统的软件源都连不上，请检查路由器能不能上网，稍后再试"
@@ -119,7 +133,7 @@ inst; r=$?
 rm -rf "$TMP"
 say "✓ 安装完成（$ver）"
 if [ "$VIA" = mirror ]; then
-	say "这次是用国内镜像（清华）补装的依赖，系统的软件源没改。平时也想用国内镜像的话，可以运行："
+	say "这次是用国内镜像（$MIRROR）补装的依赖，系统的软件源没改。平时也想用国内镜像的话，可以运行："
 	if [ "$PM" = apk ]; then say "  sed -i 's#https*://downloads.openwrt.org#$MIRROR#' /etc/apk/repositories.d/distfeeds.list"
 	else say "  sed -i 's#https*://downloads.openwrt.org#$MIRROR#' /etc/opkg/distfeeds.conf"; fi
 fi
