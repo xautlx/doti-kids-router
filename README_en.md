@@ -51,7 +51,7 @@ Kids can open the mini program too, to see whether their network is open or rest
 ## Peace of mind
 
 - **Time, not content**: Doti manages speed and duration only; it never looks at what kids do online.
-- **At home, no cloud involved**: at home the phone talks to the router directly. With remote management on, the cloud only receives the previous day's usage durations — no content.
+- **At home, straight to the router**: at home the phone talks to the router directly, and management actions skip the cloud; the cloud only handles sign-in, sync and the previous day's usage durations — no browsing content.
 - **WiFi passwords stay home**: parents' and kids' WiFi passwords live only on the router and your own devices.
 - **Open source, open to inspection**: the router software is this repository; anyone can check what it does.
 
@@ -72,7 +72,7 @@ The overview, detailed install and pairing steps, and how to verify the packages
 | | GitHub Pages | Faster in China |
 |---|---|---|
 | Homepage | [xautlx.github.io/doti-kids-router](https://xautlx.github.io/doti-kids-router/?lang=en) | [doti.top](https://doti.top/?lang=en) |
-| Quick Start | [xautlx.github.io/doti-kids-router/quick-start](https://xautlx.github.io/doti-kids-router/quick-start/?lang=en) | [doti.top/quick-start](https://doti.top/quick-start/?lang=en) |
+| Quick Start | [xautlx.github.io/doti-kids-router/quick-start.html](https://xautlx.github.io/doti-kids-router/quick-start.html?lang=en) | [doti.top/quick-start.html](https://doti.top/quick-start.html?lang=en) |
 
 Packages are in [Releases](../../releases) (also mirrored to the gitee repository of the same name).
 

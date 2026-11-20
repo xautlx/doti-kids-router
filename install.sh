@@ -15,13 +15,13 @@ die() { echo "[一点守护] ✗ $*" >&2; rm -rf "$TMP"; exit 1; }
 
 # 1 系统
 [ "$(id -u)" = 0 ] || die "请用 root 账号执行"
-[ -r /etc/openwrt_release ] || die "这台路由器不是 OpenWrt 系统，要先刷官方 OpenWrt（22.03 及以上），见 https://doti.top/quick-start/"
+[ -r /etc/openwrt_release ] || die "这台路由器不是 OpenWrt 系统，要先刷官方 OpenWrt（22.03 及以上），见 https://doti.top/quick-start.html"
 . /etc/openwrt_release
 v="$DISTRIB_RELEASE"; maj=${v%%.*}; rest=${v#*.}; min=${rest%%.*}
 case "$maj$min" in
 *[!0-9]*|"") say "系统版本：$v" ;;
 *) if [ "$maj" -lt 22 ] || { [ "$maj" -eq 22 ] && [ "$min" -lt 3 ]; }; then
-	die "需要 OpenWrt 22.03 及以上，这台是 $v。请先刷新版本的官方 OpenWrt，见 https://doti.top/quick-start/"
+	die "需要 OpenWrt 22.03 及以上，这台是 $v。请先刷新版本的官方 OpenWrt，见 https://doti.top/quick-start.html"
    fi
    say "系统版本：OpenWrt $v" ;;
 esac
@@ -80,7 +80,8 @@ MIRRORS_CN="https://mirrors.tuna.tsinghua.edu.cn/openwrt https://mirrors.aliyun.
 MIRROR=""
 VIA=""
 # 限时执行：软件源连不上时 opkg update / apk 可能卡很久
-lim() { s=$1; shift; "$@" & p=$!; ( sleep "$s"; kill "$p" 2>/dev/null ) & w=$!; wait "$p"; r=$?; kill "$w" 2>/dev/null; return $r; }
+# 计时的子进程不接输出：不然它里面的 sleep 一直占着输出管道，用 | tee、ssh 远程执行时要多等完整个限时才返回
+lim() { s=$1; shift; "$@" & p=$!; ( sleep "$s"; kill "$p" 2>/dev/null ) </dev/null >/dev/null 2>&1 & w=$!; wait "$p"; r=$?; kill "$w" 2>/dev/null; return $r; }
 # opkg 的临时配置：软件源换成镜像（OPKG_CONF_DIR 让它不读系统的 /etc/opkg/*.conf），索引放临时目录
 mkopkg() {   # mkopkg 镜像地址
 	rm -rf "$TMP/feeds" "$TMP/lists"; mkdir -p "$TMP/feeds" "$TMP/lists"

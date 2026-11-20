@@ -51,7 +51,7 @@
 ## 使用安心
 
 - **只管时间，不看内容**：只管网速和时长，不看孩子上网的内容。
-- **在家管理不经过云端**：在家时手机直接和路由器通信。开着远程管理时，云端每天只收到前一天的上网时长，不含上网内容。
+- **在家操作直连路由器**：在家时手机直接和路由器通信，管理操作不经过云端；云端只用于登录、同步和每天收前一天的上网时长，不含上网内容。
 - **WiFi 密码不上云**：家长和孩子的 WiFi 密码只存在家里的路由器和你们自己的设备上。
 - **程序开源可查**：路由器上的程序就是这个仓库，任何人都能检查它做了什么。
 
@@ -72,7 +72,7 @@ wget -O install.sh https://gitee.com/xautlx/doti-kids-router/raw/main/install.sh
 | | 国内访问更快 | GitHub Pages |
 |---|---|---|
 | 项目主页 | [doti.top](https://doti.top/) | [xautlx.github.io/doti-kids-router](https://xautlx.github.io/doti-kids-router/) |
-| 快速开始 | [doti.top/quick-start](https://doti.top/quick-start/) | [xautlx.github.io/doti-kids-router/quick-start](https://xautlx.github.io/doti-kids-router/quick-start/) |
+| 快速开始 | [doti.top/quick-start.html](https://doti.top/quick-start.html) | [xautlx.github.io/doti-kids-router/quick-start.html](https://xautlx.github.io/doti-kids-router/quick-start.html) |
 
 安装包在 [Releases](../../releases)（国内也可以到 gitee 同名仓库的发行版下载）。
 
