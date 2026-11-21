@@ -1,18 +1,16 @@
 <div align="center">
 
 <a href="https://doti.top/"><picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/logo-lockup-dark.svg">
-  <img src="assets/logo-lockup.svg" alt="一点守护 www.doti.top" width="360">
+  <source media="(prefers-color-scheme: dark)" srcset="assets/banner-zh-dark.png">
+  <img src="assets/banner-zh-light.png" alt="一点守护 www.doti.top · 不用等固定时段 · 到点只限速不断网" width="880">
 </picture></a>
 
 **孩子上网时间管理 · OpenWrt 路由器插件**
 
-不用等固定时段，到点只限速不断网
-
 [![Release](https://img.shields.io/github/v/release/xautlx/doti-kids-router?label=Release)](../../releases)
 [![OpenWrt](https://img.shields.io/badge/OpenWrt-22.03%2B-00B5E2?logo=openwrt&logoColor=white)](https://openwrt.org/)
 [![Arch](https://img.shields.io/badge/架构-all（纯脚本）-6d4ce8)](#技术特点)
-[![License](https://img.shields.io/badge/License-GPL--3.0-blue)](LICENSE)
+[![License](https://img.shields.io/badge/License-Apache--2.0-blue)](LICENSE)
 
 **[项目主页 doti.top](https://doti.top/)** · **[快速开始](https://doti.top/quick-start.html)** · 微信小程序「一点守护」 · [English](README_en.md)
 
@@ -25,6 +23,24 @@
 | 自动管 | 不固定 | 不断网 | 零安装 |
 |---|---|---|---|
 | 用一会儿、慢一会儿，自动轮换 | 孩子什么时候开始用，就从什么时候计时 | 到点只限速，消息照常收发 | 装在路由器上，孩子设备什么都不用装 |
+
+## 整体结构
+
+![整体结构](assets/architecture-zh.png)
+
+- **路由器插件（本仓库）**：计时、限速、网站屏蔽、孩子 WiFi 都在路由器上，规则保存在路由器上、由路由器执行。
+- **微信小程序「一点守护」**：家长管理用。在家连着家长 WiFi 时直接和路由器通信，不经过云端；不在家时经云端远程管理。
+- **云端服务**：设备连接管理，MQTT 当门铃、路由器经 HTTPS 同步，家长在外面的操作几秒内送到。
+
+## 界面一览
+
+家长端：状态、孩子网络的规则、今天的上网记录、历史统计
+
+![家长端](screenshots/parent@2x.jpg)
+
+孩子端：加入、网络开放中、网络休息中、找家长要时间
+
+![孩子端](screenshots/kid@2x.jpg)
 
 ## 快速开始
 
@@ -45,16 +61,6 @@
 | 快速开始（刷机建议、不用命令行的装法、核对安装包） | [doti.top/quick-start.html](https://doti.top/quick-start.html) | [xautlx.github.io/doti-kids-router/quick-start.html](https://xautlx.github.io/doti-kids-router/quick-start.html) |
 
 安装包在 [Releases](../../releases)（国内也可以到 gitee 同名仓库的发行版下载）。
-
-## 界面一览
-
-家长端：状态、孩子网络的规则、今天的上网记录、历史统计
-
-![家长端](screenshots/parent@2x.jpg)
-
-孩子端：加入、网络开放中、网络休息中、找家长要时间
-
-![孩子端](screenshots/kid@2x.jpg)
 
 ## 为什么做
 
@@ -82,14 +88,6 @@
 - 👴 **全家一起管**：只要微信，爷爷奶奶点一下邀请就能一起管；孩子不用注册任何账号。
 
 上面的时长都只是示例，家长按孩子的情况自己设。
-
-## 整体结构
-
-![整体结构](assets/architecture-zh.png)
-
-- **路由器插件（本仓库）**：计时、限速、网站屏蔽、孩子 WiFi 都在路由器上，规则保存在路由器上、由路由器执行。
-- **微信小程序「一点守护」**：家长管理用。在家连着家长 WiFi 时直接和路由器通信，不经过云端；不在家时经云端远程管理。
-- **云端服务**：设备连接管理，路由器经 HTTPS 同步、MQTT 当门铃，家长在外面的操作几秒内送到；只收前一天的上网时长。
 
 ## 使用安心
 
@@ -126,7 +124,7 @@
 - **DNS 屏蔽绕不过去**：每个孩子网络一个 dnsmasq，孩子网络里所有 53 端口的查询都转到它，手工改 DNS 也没用；可选拦截常见的加密 DNS（DoT、DoH）。
 - **家里局域网默认不管**：访问打印机、NAS 不计时、不限速；家里有旁路由、代理的，可以改成一起管。
 - **在家直连，隐私优先**：小程序在家经局域网 HTTP 接口直接管理路由器，家长凭签名票据操作，外网侧一律拒绝；孩子网络只能看自己的状态。
-- **远程秒到**：路由器经 HTTPS 和云端同步，MQTT 门铃让家长在外面的操作几秒内送到。
+- **远程秒到**：MQTT 门铃一响，路由器马上经 HTTPS 和云端同步，家长在外面的操作几秒内送到。
 - **可复现构建、签名升级**：同一份代码在哪打包都得到同一个文件，可以和发布的 SHA256 比对；在线升级只从本仓库的发行版下载，按签名过的 SHA256 核对后才安装，失败自动回滚。
 
 ## 自行打包
@@ -144,7 +142,7 @@ python3 build.py --apk   # 再打 dist/doti-kids-router-<版本>-r1.apk、dist/d
 |---|---|
 | `files/` | 软件包 `doti-kids-router` 装到路由器上的文件 |
 | `updater/` | 升级程序 `doti-kids-router-updater` |
-| `blocklist/` | 网站屏蔽名单（始终屏蔽、游戏、短视频、影视） |
+| `blocklist/` | 网站屏蔽名单（始终屏蔽、游戏、短视频和直播、影视） |
 | `build.py` | 打包脚本 |
 | `install.sh` | 安装脚本（判断系统、下载对应格式的包、校验、安装） |
 
@@ -155,6 +153,6 @@ python3 build.py --apk   # 再打 dist/doti-kids-router-<版本>-r1.apk、dist/d
 
 ## 许可证
 
-[GPL-3.0](LICENSE)。
+[Apache-2.0](LICENSE)：可以自由使用、修改、商用和再分发。「一点守护」「Doti」的名称和图文标识不在授权范围内，详见 [NOTICE](NOTICE)。
 
-始终屏蔽名单（`blocklist/always.txt`）的成人、赌博类域名取自 [StevenBlack/hosts](https://github.com/StevenBlack/hosts)（MIT）。
+关于网站屏蔽名单（`blocklist/` 目录）：始终屏蔽名单（`always.txt`）里的成人、赌博类域名取自 [StevenBlack/hosts](https://github.com/StevenBlack/hosts)（MIT）；游戏、短视频和直播、影视三个可选分类的名单，是我们从互联网公开信息收集整理的。每个文件开头写了收录规则，欢迎提 issue 补充或纠错。

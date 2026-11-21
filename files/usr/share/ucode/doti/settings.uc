@@ -4,7 +4,8 @@
 export const SURF = [0, 15, 30, 45, 60, 75, 90, 120, 240, 1440];
 export const LIMIT = [15, 30, 45, 60, 75, 90, 120, 240, 1440];
 export const DAILY = [0, 30, 60, 90, 120, 180, 240, 480, 720, 960];
-export const CATEGORIES = ['game', 'shortvideo', 'film'];   // 游戏、短视频和直播、影视
+export const CATEGORIES = ['game', 'short-video-live', 'movie-tv-vod'];   // 游戏、短视频和直播、影视点播
+const RENAMED = { shortvideo: 'short-video-live', film: 'movie-tv-vod' };   // 旧版本存的分类代号 → 现在的
 // 孩子网络（最多三个，k1 → doti1 → DOTI-<编号>-01 → 屏蔽 DNS 5390；init.d、80-doti 里也按这三个写，order_check 核对）
 export const NET_KEYS = ['k1', 'k2', 'k3'];
 // 称呼、网络名、时段名最长几个字
@@ -108,7 +109,8 @@ function checkWindows(ws) {
 function checkNetBlock(b) {
 	if (type(b) != 'object') return [null, 'block'];
 	const cats = [], off = [];
-	for (let c in (b.categories ?? [])) {
+	for (let x in (b.categories ?? [])) {
+		const c = RENAMED[x] ?? x;
 		if (!inList(c, CATEGORIES)) return [null, 'block.categories'];
 		if (!inList(c, cats)) push(cats, c);
 	}

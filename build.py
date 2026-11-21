@@ -186,7 +186,7 @@ def ipk(path, control, scripts, data):
         f.write(targz([('./debian-binary', b'2.0\n', 0o644), ('./data.tar.gz', dat, 0o644), ('./control.tar.gz', ctl, 0o644)]))
 
 
-APK_INFO = {'arch': 'noarch', 'license': 'GPL-3.0-only', 'origin': 'doti-kids-router', 'url': 'https://github.com/xautlx/doti-kids-router', 'maintainer': '一点守护'}
+APK_INFO = {'arch': 'noarch', 'license': 'Apache-2.0', 'origin': 'doti-kids-router', 'url': 'https://github.com/xautlx/doti-kids-router', 'maintainer': '一点守护'}
 
 
 def apk(path, name, version, depends, desc, scripts, data):
