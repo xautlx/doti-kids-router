@@ -2,10 +2,8 @@
 
 <a href="https://doti.top/?lang=en"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/banner-en-dark.png">
-  <img src="assets/banner-en-light.png" alt="Doti for kids www.doti.top · No fixed slots · Slows down, never cuts off" width="880">
+  <img src="assets/banner-en-light.png" alt="Doti for kids www.doti.top · Screen time for kids · an OpenWrt router package · No fixed slots · Slows down, never cuts off" width="880">
 </picture></a>
-
-**Screen time for kids · an OpenWrt router package**
 
 [![Release](https://img.shields.io/github/v/release/xautlx/doti-kids-router?label=Release)](../../releases)
 [![OpenWrt](https://img.shields.io/badge/OpenWrt-22.03%2B-00B5E2?logo=openwrt&logoColor=white)](https://openwrt.org/)

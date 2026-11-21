@@ -2,10 +2,8 @@
 
 <a href="https://doti.top/"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/banner-zh-dark.png">
-  <img src="assets/banner-zh-light.png" alt="一点守护 www.doti.top · 不用等固定时段 · 到点只限速不断网" width="880">
+  <img src="assets/banner-zh-light.png" alt="一点守护 www.doti.top · 孩子上网时间管理 · OpenWrt 路由器插件 · 不用等固定时段 · 到点只限速不断网" width="880">
 </picture></a>
-
-**孩子上网时间管理 · OpenWrt 路由器插件**
 
 [![Release](https://img.shields.io/github/v/release/xautlx/doti-kids-router?label=Release)](../../releases)
 [![OpenWrt](https://img.shields.io/badge/OpenWrt-22.03%2B-00B5E2?logo=openwrt&logoColor=white)](https://openwrt.org/)

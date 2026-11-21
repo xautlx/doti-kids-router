@@ -21,7 +21,7 @@ import { backoff, post as cloudPost, url as cloudUrl } from 'doti.cloud';
 import { hexRand, lanAddr, logger, sh } from 'doti.sys';
 import { make as accountMake } from 'doti.account';
 
-const VERSION = '2.0.0';
+const VERSION = '2.1.0';
 const CLOCK_FIX = 120;
 const TREND_N = 60, TICK = 10, DT_MAX = 120, REAPPLY = 600, BASE_SAVE = 3600, WANT_ON = 3, WANT_OFF = 6, SEG_JITTER = 90, CONFIRM_TICKS = 3, LIMIT_KBPS = 100;   // LIMIT_KBPS：设置里没带限速时网速时的默认
 const cfg = {
