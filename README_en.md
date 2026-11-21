@@ -1,9 +1,9 @@
 <div align="center">
 
-<a href="https://doti.top/?lang=en"><picture>
+<picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/banner-en-dark.png">
   <img src="assets/banner-en-light.png" alt="Doti for kids www.doti.top · Screen time for kids · an OpenWrt router package · No fixed slots · Slows down, never cuts off" width="880">
-</picture></a>
+</picture>
 
 [![Release](https://img.shields.io/github/v/release/xautlx/doti-kids-router?label=Release)](../../releases)
 [![OpenWrt](https://img.shields.io/badge/OpenWrt-22.03%2B-00B5E2?logo=openwrt&logoColor=white)](https://openwrt.org/)
@@ -34,11 +34,11 @@ Doti is screen time for kids, handled by your OpenWrt router. The kids' internet
 
 Parent side: status, a kid network's rules, today's usage, usage history
 
-![Parent side](screenshots/parent@2x.jpg)
+![Parent side](screenshots/parent@2x.webp)
 
 Kid side: joining, network open, network resting, asking a parent for time
 
-![Kid side](screenshots/kid@2x.jpg)
+![Kid side](screenshots/kid@2x.webp)
 
 ## Quick start
 
