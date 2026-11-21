@@ -1,27 +1,72 @@
-# doti-kids-router · Doti (router side)
+<div align="center">
 
-> Doti, made with heart. A little more care, a lot more room to grow.
+<a href="https://doti.top/?lang=en"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/logo-lockup-dark.svg">
+  <img src="assets/logo-lockup.svg" alt="Doti · 一点守护 www.doti.top" width="360">
+</picture></a>
 
-[中文](README.md)
+**Screen time for kids · an OpenWrt router package**
+
+No fixed time slots to wait for. When time's up it slows down, never cuts off.
+
+[![Release](https://img.shields.io/github/v/release/xautlx/doti-kids-router?label=Release)](../../releases)
+[![OpenWrt](https://img.shields.io/badge/OpenWrt-22.03%2B-00B5E2?logo=openwrt&logoColor=white)](https://openwrt.org/)
+[![Arch](https://img.shields.io/badge/arch-all%20(pure%20script)-6d4ce8)](#technical-features)
+[![License](https://img.shields.io/badge/License-GPL--3.0-blue)](LICENSE)
+
+**[Homepage doti.top](https://doti.top/?lang=en)** · **[Quick Start](https://doti.top/quick-start.html?lang=en)** · WeChat mini program “一点守护” · [中文](README.md)
+
+</div>
+
+---
 
 Doti is screen time for kids, handled by your OpenWrt router. The kids' internet **runs a while, then slows a while**, on its own — no fixed time slots to wait for. When time's up it just slows down and never cuts off, so messages and homework lookups still work. Parents manage everything from the WeChat mini program “一点守护”, and nothing gets installed on the kids' devices.
-
-This repository is the router software (the `doti-kids-router` package and the `doti-kids-router-updater` updater), fully open source.
 
 | Automatic | Flexible | Never offline | Nothing to install |
 |---|---|---|---|
 | Runs a while, slows a while, on its own | The clock starts whenever the kids start | Time's up only slows things down; messages still go through | Lives on the router; nothing on the kids' devices |
 
+## Quick start
+
+1. **Flash official OpenWrt 22.03 or later** (24.10 recommended for a fresh flash).
+2. **SSH into the router and run one command** (it detects the system, downloads the matching package, verifies and installs it — 30–50 seconds):
+
+   ```sh
+   cd /tmp && wget -O install.sh https://gitee.com/xautlx/doti-kids-router/raw/main/install.sh && sh install.sh
+   ```
+
+3. **Join the parents' Wi-Fi `DOTI-XXXX-ADMIN`** with your phone, open the WeChat mini program “一点守护” and follow the pairing steps.
+
+No router yet? The mini program has a full demo for both the parent and the kid side.
+
+| | GitHub Pages | Faster in China |
+|---|---|---|
+| Homepage | [xautlx.github.io/doti-kids-router](https://xautlx.github.io/doti-kids-router/?lang=en) | [doti.top](https://doti.top/?lang=en) |
+| Quick Start (flashing tips, installing without a command line, verifying packages) | [xautlx.github.io/doti-kids-router/quick-start.html](https://xautlx.github.io/doti-kids-router/quick-start.html?lang=en) | [doti.top/quick-start.html](https://doti.top/quick-start.html?lang=en) |
+
+Packages are in [Releases](../../releases) (also mirrored to the gitee repository of the same name).
+
+## Screenshots
+
+Parent side: status, a kid network's rules, today's usage, usage history
+
+![Parent side](screenshots/parent@2x.jpg)
+
+Kid side: joining, network open, network resting, asking a parent for time
+
+![Kid side](screenshots/kid@2x.jpg)
+
 ## Why
 
-- **Homework's done, but they have to wait for the time slot**: typical parental controls only know “online from X to Y”, so finishing early means sitting around.
+- **Homework's done, but they have to wait for the time slot**: typical parental controls only know “online from X to Y”, so finishing early means sitting around; a daily total just gets used up in one long sitting.
 - **Time's up, but they can't stop**: a hard cut-off lands mid-chat or mid-search, and the bargaining starts — leaving the parent as the bad guy.
+- **Too many devices**: per-device rules mean switching from the phone to the tablet when time's up; no single device goes over, but the total does.
 
 Too loose and they get hooked; too strict and it hurts the relationship. Doti takes another route: the internet is always there, only the speed takes turns, and the router is the one saying “time's up”.
 
 ## How it works for families
 
-1. **Go online any time**: the network is always on, and the clock starts whenever the kids start.
+1. **Go online any time**: the network is always on, and the clock starts whenever the kids start; idle devices don't count.
 2. **Slows down automatically**: after one round (say 30 minutes) the speed drops — never disconnects, so messages and lookups still work, while video and games become hard to use.
 3. **Speed comes back by itself**: after the slow stretch (say 60 minutes) full speed returns, and the next round starts the next time they go online.
 
@@ -30,61 +75,59 @@ Also:
 - 🌙 **Fixed periods**: bedtime, meals and online classes get their own schedule — always slow or always open.
 - ⏱ **Daily limit**: once the day's total is used up, no new rounds start.
 - 🚫 **Site blocking**: adult, gambling and scam sites are always blocked; games, short videos and streaming can be blocked per kid, plus your own list.
-- 👨‍👩‍👧 **Each kid separately**: up to three kids' WiFi networks with their own rules; all of one kid's devices count together; the parents' WiFi is never limited.
-- 📲 **Open it up on the spot**: online class, research, a reward for finishing a book — one tap in the mini program opens it up; with remote management, even when you're out.
-- 📊 **Usage records**: today's usage by hour and by device; with remote management, trends over 7 days, 1 month, 6 months and 1 year.
+- 👨‍👩‍👧 **Per kid, not per device**: up to three kids' Wi-Fi networks with their own rules; all of one kid's devices share one clock; a shared living-room TV can have its own network; the parents' Wi-Fi is never limited.
+- 📲 **Open it up on the spot**: online class, research, a reward for finishing a book — one tap in the mini program opens it up, even when you're out.
+- 📖 **Earn time with a check-in**: kids can send a photo of their reading or homework to ask for more time — building the habit along the way.
+- 📊 **Usage records**: today's usage by hour and by device, plus trends over 7 days, 1 month, 6 months and 1 year.
+- 👴 **The whole family**: all it takes is WeChat — grandparents join with one tap on an invite; kids need no account.
 
 The durations above are only examples — parents set their own.
 
-## Screenshots
+## How it fits together
 
-Parent side: status, a kid network's rules, today's usage, remote usage history
+![How it fits together](assets/architecture-en.png)
 
-![Parent side](screenshots/parent@2x.jpg)
-
-Kid side: joining, network open, network resting, asking a parent for time
-
-![Kid side](screenshots/kid@2x.jpg)
-
-Kids can open the mini program too, to see whether their network is open or resting and how much time is left; while it's resting, it suggests offline things worth doing — reading, sports, drawing. Want a bit more time? They can send a parent a photo of their reading or homework, or just say why.
+- **Router package (this repository)**: timing, slow-downs, site blocking and the kids' Wi-Fi all live on the router; rules are stored and enforced there.
+- **WeChat mini program “一点守护”**: for parents. At home on the parents' Wi-Fi it talks to the router directly, skipping the cloud; away from home it goes through the cloud.
+- **Cloud service**: keeps routers connected — HTTPS sync plus an MQTT doorbell, so parents' actions from outside arrive within seconds; it only receives the previous day's usage totals.
 
 ## Peace of mind
 
-- **Time, not content**: Doti manages speed and duration only; it never looks at what kids do online.
-- **At home, straight to the router**: at home the phone talks to the router directly, and management actions skip the cloud; the cloud only handles sign-in, sync and the previous day's usage durations — no browsing content.
-- **WiFi passwords stay home**: parents' and kids' WiFi passwords live only on the router and your own devices.
-- **Open source, open to inspection**: the router software is this repository; anyone can check what it does.
+- **Time, not content**: Doti manages speed and duration only; it never records which sites kids visit.
+- **At home, straight to the router**: at home the phone talks to the router directly, and management actions skip the cloud; the cloud only handles sign-in, sync and the previous day's usage totals.
+- **Wi-Fi passwords stay home**: parents' and kids' Wi-Fi passwords live only on the router and your own devices.
+- **Open source, open to inspection**: the router software is this repository; packages are built reproducibly by GitHub Actions from public code.
 
-## Quick install
+## Requirements and tested devices
 
-**Requirements**: OpenWrt 22.03 or later (24.10 recommended for a fresh flash). The package is pure script, so it works on any CPU architecture.
+- **System**: official OpenWrt 22.03 or later (needs firewall4 / nftables); ipk on 22.03–24.10, apk on 25.x — the installer picks automatically.
+- **Hardware**: pure script, any CPU architecture; even 8 MB-flash routers work (at least 800 KB free before installing).
+- **Tested**:
 
-Run on the router (it detects the system, downloads the matching package, verifies and installs it):
+  | Device | SoC | OpenWrt | Result |
+  |---|---|---|---|
+  | Phicomm K2P | MT7621 | 22.03.0, 24.10.8, 25.12.6 | clean installs pass; in daily use |
+  | Phicomm K2 | MT7620, 8 MB flash | 24.10.8 | clean install passes; about 900 KB left |
 
-```sh
-wget -O install.sh https://gitee.com/xautlx/doti-kids-router/raw/main/install.sh && sh install.sh
-```
+  Other models: reports welcome (please include the model and OpenWrt version in the issue). ImmortalWrt and other firmware based on recent OpenWrt usually work too.
 
-Then join the router's parents' WiFi with your phone, open the WeChat mini program “一点守护” and follow the pairing steps. No router yet? The mini program has a full demo mode.
+## What installing changes on your router
 
-The overview, detailed install and pairing steps, and how to verify the packages are on the homepage and in the Quick Start:
-
-| | GitHub Pages | Faster in China |
-|---|---|---|
-| Homepage | [xautlx.github.io/doti-kids-router](https://xautlx.github.io/doti-kids-router/?lang=en) | [doti.top](https://doti.top/?lang=en) |
-| Quick Start | [xautlx.github.io/doti-kids-router/quick-start.html](https://xautlx.github.io/doti-kids-router/quick-start.html?lang=en) | [doti.top/quick-start.html](https://doti.top/quick-start.html?lang=en) |
-
-Packages are in [Releases](../../releases) (also mirrored to the gitee repository of the same name).
+- Up to 3 kid networks (separate subnets, `10.10.1–3.0/24` by default and moved automatically if that clashes with your upstream network; separate firewall zones; Wi-Fi `DOTI-<code>-01`–`03`) plus the parents' Wi-Fi `DOTI-<code>-ADMIN`; your existing Wi-Fi and LAN are left alone.
+- A timezone still set to UTC becomes Asia/Shanghai; flow offloading is turned off if enabled (otherwise limits and counters don't apply).
+- Missing dependencies are installed (usually just `mosquitto-client-nossl` and a few small libraries), trying mirrors in China first; your package feed configuration isn't changed.
+- If root has no password, it's set to the parents' Wi-Fi password after pairing; a password you set yourself is kept.
 
 ## Technical features
 
-- **Pure script, any architecture**: the daemon is written in ucode, which ships with OpenWrt — no compiled binaries, so it runs on any CPU; it installs on OpenWrt 22.03 and later and is light enough for older routers.
-- **Slow down, never cut off**: each kid's WiFi is its own network; the daemon rotates open and slow periods by the rules, limiting bandwidth with nftables and capping the UDP packet rate games rely on — the connection stays up, so messages and lookups keep working.
-- **Timed per kid, not per device**: phones, tablets and the TV on one kid's WiFi share the same clock, so switching devices doesn't help; time counts only while traffic actually flows.
-- **DNS blocking that sticks**: a dnsmasq blocking DNS per kid network; every port-53 query from a kid network is redirected to it, so changing the DNS by hand doesn't help; common encrypted DNS (DoT, DoH) can optionally be blocked.
-- **Local first, privacy first**: at home the mini program manages the router directly over a LAN HTTP API with signed tickets; the WAN side is refused, and kid networks only see their own status. Browsing content is never recorded, and WiFi passwords never leave home.
-- **Remote in seconds**: with remote management on, the router syncs with the cloud over HTTPS, and an MQTT doorbell delivers parents' actions within seconds; the cloud only receives the previous day's usage durations.
-- **Reproducible builds, signed updates**: the same source produces the same file anywhere, checkable against the published SHA256; packages are built by GitHub Actions from public code, untouched by hand; online updates only come from this repository's releases and are installed after checking the signed SHA256.
+- **Pure script, any architecture**: the daemon is written in ucode, which ships with OpenWrt — no compiled binaries, so it runs on any CPU and is light enough for older routers.
+- **Slow down, never cut off**: each kid's Wi-Fi is its own network; the daemon rotates open and slow periods by the rules, limiting bandwidth with nftables and capping the UDP packet rate games rely on — the connection stays up, so messages and lookups keep working.
+- **Timed per kid, not per device**: the phone and tablet on one kid's Wi-Fi share the same clock, so switching devices doesn't help; time counts only while traffic actually flows, measured against each device's learned background noise.
+- **DNS blocking that sticks**: a dnsmasq per kid network; every port-53 query from a kid network is redirected to it, so changing the DNS by hand doesn't help; common encrypted DNS (DoT, DoH) can optionally be blocked.
+- **Home LAN left alone by default**: printers and the NAS don't count toward time and aren't slowed; households with a side router or proxy can include the LAN too.
+- **Local first, privacy first**: at home the mini program manages the router directly over a LAN HTTP API with signed tickets; the WAN side is refused, and kid networks only see their own status.
+- **Remote in seconds**: the router syncs with the cloud over HTTPS, and an MQTT doorbell delivers parents' actions within seconds.
+- **Reproducible builds, signed updates**: the same source produces the same file anywhere, checkable against the published SHA256; online updates only come from this repository's releases, are installed after checking the signed SHA256, and roll back on failure.
 
 ## Build it yourself
 
@@ -99,11 +142,16 @@ Check the result against `SHA256SUMS` in Releases; pushing a `v<version>` tag ma
 
 | Path | Contents |
 |---|---|
-| `files/` | Files the `doti` package installs on the router |
+| `files/` | Files the `doti-kids-router` package installs on the router |
 | `updater/` | The `doti-kids-router-updater` updater |
 | `blocklist/` | Site blocklists (always-on, games, short videos, streaming) |
 | `build.py` | Build script |
 | `install.sh` | Install script (detects the system, downloads the matching package, verifies and installs it) |
+
+## Feedback
+
+- Install problems or bugs: open an [issue](../../issues) with the router model, OpenWrt version and installer output.
+- Questions and suggestions: WeChat mini program “一点守护” → “我的 → 联系客服”.
 
 ## License
 
