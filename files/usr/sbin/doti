@@ -11,7 +11,7 @@ import { cleanDomain, cleanText, defaults as settingsDefaults, merge as settings
 import { make as opsMake } from 'doti.ops';
 import { doneOf, keyState, remember, snapshotOf, snapshotReport, urgent as remoteUrgent } from 'doti.remote';
 import { adminSsid, kidSsid, apply as wifiApply, bins as wifiBins, cmdsDisabled, cmdsKey, cmdsParent, ifacesOf, kidNet, load as wifiLoad, parentHasPassword, parentIfaces, parentTargets, randDigits, shq, state as wifiState, validPassword } from 'doti.wifi';
-import { follow as rootFollow, hash as rootHash, init as rootInit, release as rootRelease } from 'doti.rootpw';
+import { follow as rootFollow, init as rootInit, kind as rootKind, release as rootRelease, temp as rootTemp } from 'doti.rootpw';
 import { add as usageAdd, devInfo, expired as usageExpired, onlineMin, pending as usagePending, toApi as usageApi, trendPush } from 'doti.usage';
 import { append as evAppend, step as evStep } from 'doti.events';
 import { bumpGen, ensureDirs, etc, gen, readJson, setApplied, takeMark, tmp, withLock, writeJson, writeSecret, writeText } from 'doti.store';
@@ -20,8 +20,9 @@ import { cleanAvatar, emptyList, toPublic, indexOf as listIndex, isParent, join 
 import { backoff, post as cloudPost, url as cloudUrl } from 'doti.cloud';
 import { hexRand, lanAddr, logger, sh } from 'doti.sys';
 import { make as accountMake } from 'doti.account';
+import { collect as envCollect } from 'doti.env';
 
-const VERSION = '2.1.0';
+const VERSION = '2.1.1';
 const CLOCK_FIX = 120;
 const TREND_N = 60, TICK = 10, DT_MAX = 120, REAPPLY = 600, BASE_SAVE = 3600, WANT_ON = 3, WANT_OFF = 6, SEG_JITTER = 90, CONFIRM_TICKS = 3, LIMIT_KBPS = 100;   // LIMIT_KBPS：设置里没带限速时网速时的默认
 const cfg = {
@@ -38,7 +39,12 @@ const cfg = {
 	sysnet: getenv('DOTI_SYSNET') || '/sys/class/net',
 	updater: getenv('DOTI_UPDATER') || '/usr/sbin/doti-update',
 	updDir: getenv('DOTI_UPD_DIR') || '/etc/doti-updater',
+	updFix: getenv('DOTI_UPD_FIX') || '/usr/libexec/doti/updater-fix',
+	updInitd: getenv('DOTI_UPD_INITD') || '/etc/init.d/doti-updater',
 	date: getenv('DOTI_DATE') || 'date',
+	sys: getenv('DOTI_SYSROOT') || '',
+	overlay: getenv('DOTI_OVERLAY') || '/overlay',
+	pm: getenv('DOTI_PM'),
 };
 
 const log = logger('doti');
@@ -53,9 +59,10 @@ const OPS = opsMake({ settings: { defaults: settingsDefaults, merge: settingsMer
 	parents: { empty: emptyList, indexOf: listIndex, setProfile, cleanNick: x => cleanText(x, NAME_MAX), cleanAvatar } });
 
 // ---------- 身份 ----------
+// 身份写不进闪存（空间满、只读）时记成 unsaved：先不登记，免得每次启动换一个身份、云端多出一堆假设备；之后每圈再试着写
 function newIdentity() {
 	const id = { id: hexRand(16), key: hexRand(32), code: uc(hexRand(2)), registered: false };
-	writeSecret(etc('identity.json'), id);
+	if (!writeSecret(etc('identity.json'), id)) { id.unsaved = true; log('设备身份写不进闪存（空间满了？），先不登记'); }
 	log('生成设备身份，编号 ' + id.code);
 	return id;
 }
@@ -69,9 +76,12 @@ function factoryMac() {
 	if (index('2367abef', substr(m, 1, 1)) >= 0) return null;
 	return m;
 }
+// 身份文件坏了（读出来不是完整身份）：留一份 identity.json.bad 方便排查，再生成新身份
 function identity() {
 	const id = readJson(etc('identity.json'), null);
-	return (id?.id && id?.key && id?.code) ? id : newIdentity();
+	if (type(id?.id) == 'string' && type(id?.key) == 'string' && type(id?.code) == 'string' && id.id && id.key && id.code) return id;
+	if (exists(etc('identity.json'))) { fs.rename(etc('identity.json'), etc('identity.json.bad')); log('设备身份文件坏了，已改名 identity.json.bad，重新生成'); }
+	return newIdentity();
 }
 
 // ---------- 配置 ----------
@@ -480,10 +490,29 @@ function retryDue(t, m) { return m >= (t.next ?? 0); }
 function retryFail(t, m, base, cap) { t.fails = (t.fails ?? 0) + 1; t.next = m + backoff(t.fails, base, cap); }
 function retryOk(t) { t.fails = 0; t.next = 0; }
 
+// 已装升级程序的版本：在用的那份副本，没有就看包里装的那份；都没有（没装上）回空串
+function updaterVersion() {
+	const act = trim(fs.readfile(cfg.updDir + '/active') ?? '');
+	const uv = match((act ? fs.readfile(cfg.updDir + '/slot-' + act + '/doti-update.uc') : null) ?? fs.readfile(cfg.sys + '/usr/share/doti-updater/doti-update.uc') ?? '', /const VERSION = '([^']+)'/);
+	return uv ? uv[1] : '';
+}
+// 登记带的系统信息：采集出任何错都只是不带，不影响登记（DOTI_ENV_FAIL 是测试用的，设了就让采集出异常）
+function envSafe() {
+	try {
+		if (getenv('DOTI_ENV_FAIL')) die('DOTI_ENV_FAIL');
+		return envCollect({ sys: cfg.sys, sh, ubus: cfg.ubus, overlay: cfg.overlay, pm: cfg.pm });
+	} catch (e) {
+		log('采集系统信息出错，这次登记不带：' + e);
+		return null;
+	}
+}
+// 登记：带系统信息（env，给兼容性统计）和升级程序版本（updater，空串 = 没装上）
 function register(id) {
-	const mac = factoryMac();
-	const r = call(id, 'register', { id: id.id, key: id.key, code: id.code, model: trim(fs.readfile('/tmp/sysinfo/model') ?? ''),
-		version: VERSION, ...(mac ? { macHash: sha256('doti-mac|' + mac) } : {}) });
+	const mac = factoryMac(), env = envSafe();
+	let uv = '';
+	try { uv = updaterVersion(); } catch (e) { uv = ''; }
+	const r = call(id, 'register', { id: id.id, key: id.key, code: id.code, model: trim(fs.readfile(cfg.sys + '/tmp/sysinfo/model') ?? ''),
+		version: VERSION, ...(mac ? { macHash: sha256('doti-mac|' + mac) } : {}), updater: uv, ...(env ? { env } : {}) });
 	if (r?.ok) {
 		id.registered = true;
 		writeSecret(etc('identity.json'), id);
@@ -495,6 +524,7 @@ function register(id) {
 		writeSecret(etc('identity.json'), id);
 		log('设备 ID 已被占用，换一个重新登记');
 	}
+	else log('登记没成功：' + (r?.error ? r.error + (r.msg ? '（' + r.msg + '）' : '') : '连不上云端或回包不对') + '，稍后再试');
 	return false;
 }
 
@@ -526,32 +556,65 @@ function backupUpload(id, c) {
 	retryFail(bk, mono(), 60, 3600);
 }
 
-// 已绑定但 root 还没设密码（绑定在这个功能之前）：用现在的家长 WiFi 密码补上，每次启动查一次
 // 出厂默认 root 密码：预装时安装脚本写在 /etc/doti/preinstall 里（只有 root 能读；8 位以上才算，空标记只管网段）
 function preinstallPw() { const p = trim(fs.readfile(etc('preinstall')) ?? ''); return length(p) >= 8 ? p : null; }
-let rootChecked = false;
+// 自己装的、没人绑定时，不用密码的家长 WiFi 开着那段时间 root 临时用的默认密码（公开的，安装脚本和说明里都写着）
+const ROOT_TEMP_PW = 'Passwd4Doti';
+function bound() { return length(readJson(etc('parents.json'), null)?.parents ?? []) > 0; }
+
+// 认领限时：开机（或解除绑定）后不用密码的家长 WiFi 开 30 分钟
+const CLAIM_OPEN = 1800;
+function claimOpen(m) { return m < +(fs.readfile(tmp('claim-from')) ?? 0) + CLAIM_OPEN; }
+
+// root 密码按现在的状态对齐（每 10 秒看一次，断电、重启后也一样）：
+// 自己装的没人绑定：家长 WiFi 开放中 root 没设密码 → 临时默认密码；关闭后还是那个 → 恢复为空（rootpw.uc temp）；
+// 预装的没人绑定：启动时 root 没设密码就设成出厂默认密码；
+// 已绑定：root 是临时默认密码，或启动时 root 还没设密码（绑定在这个功能之前）→ 换成现在的家长 WiFi 密码
+let rootFirst = true, rootNext = 0;
 function rootStep(id) {
-	if (rootChecked) return;
-	rootChecked = true;
-	const bound = length(readJson(etc('parents.json'), null)?.parents ?? []) > 0;
-	// 预装的、还没人绑定：root 不留空（rootpw.uc），设成出厂默认密码，绑定时换成家长 WiFi 密码
-	const dflt = preinstallPw();
-	if (!bound && dflt) { if (rootInit(dflt, sha256) == 'set') log('预装：root 密码已设成出厂默认密码，绑定后换成家长 WiFi 密码'); return; }
-	if (rootHash() !== '' || !bound) return;
+	const m = mono();
+	if (m < rootNext) return;
+	rootNext = m + 10;
+	const first = rootFirst, dflt = preinstallPw();
+	rootFirst = false;
+	if (!bound()) {
+		if (dflt) { if (first && rootInit(dflt, sha256) == 'set') log('预装：root 密码已设成出厂默认密码，绑定后换成家长 WiFi 密码'); return; }
+		const r = rootTemp(claimOpen(m), ROOT_TEMP_PW, sha256);
+		if (r == 'set') log('家长 WiFi 开放中：root 密码临时设成默认密码 ' + ROOT_TEMP_PW + '，关闭后恢复为空');
+		else if (r == 'clear') log('家长 WiFi 已关闭：root 的临时默认密码已去掉，恢复为空');
+		return;
+	}
+	const k = rootKind(sha256);
+	if (k != 'temp' && !(first && k == 'empty')) return;
 	const f = filter(parentIfaces(wifiLoad(wifiBins()), id.code), x => x.ours && x.enc != '' && x.enc != 'none' && length(x.key ?? '') >= 8)[0];
 	if (f && rootFollow(f.key, sha256) == 'set') log('root 密码已设成家长 WiFi 密码');
 }
 
-// 认领限时
-const CLAIM_OPEN = 1800;
 let claimNext = 0;
+// 绑定前诊断（没绑定时每 10 秒更新 /tmp/doti/prebind.json，升级程序报到时带上，帮着查「装好了绑不上」）：
+// 家长 WiFi 起来没（无线状态里它有网卡）、开放还剩几分钟、开放期间连过家长 WiFi 的设备有几台（只数数量，不留 MAC）、
+// 绑定请求来过几次、最近一次失败的错误码（局域网接口记在 claim-stats.json）
+let pbSeen = {};
+function prebindNote(b, ours, open, m) {
+	let st = null;
+	try { st = json(sh(b.ubus + ' call network.wireless status 2>/dev/null') || 'null'); } catch (e) { st = null; }
+	const secs = map(ours, f => f.sec), ifs = [];
+	if (type(st) == 'object')
+		for (let r in keys(st)) for (let i in st[r]?.interfaces ?? []) if (index(secs, i?.section) >= 0 && i?.ifname) push(ifs, i.ifname);
+	if (open) for (let ifc in ifs) for (let mac in keys(parseStations(sh(sprintf('%s dev %s station dump 2>/dev/null', cfg.iw, shq(ifc)))) ?? {})) pbSeen[mac] = true;
+	const cs = readJson(tmp('claim-stats.json'), null), left = +(fs.readfile(tmp('claim-from')) ?? 0) + CLAIM_OPEN - m;
+	writeJson(tmp('prebind.json'), { up: length(ifs) > 0, openMin: open && left > 0 ? int((left + 59) / 60) : 0, clients: length(keys(pbSeen)),
+		claims: type(cs?.n) == 'int' ? cs.n : 0, err: type(cs?.err) == 'string' ? cs.err : '' });
+}
 function claimStep(id) {
 	const m = mono();
 	if (m < claimNext) return;
 	claimNext = m + 10;
-	const claimed = length(readJson(etc('parents.json'), null)?.parents ?? []) > 0, off = !!fs.stat(etc('temp-off'));
+	const claimed = bound(), off = !!fs.stat(etc('temp-off'));
+	if (claimed && exists(tmp('prebind.json'))) fs.unlink(tmp('prebind.json'));
 	if (claimed && !off) return;
 	const b = wifiBins(), ours = filter(parentIfaces(wifiLoad(b), id.code), f => f.ours);
+	if (!claimed) { try { prebindNote(b, ours, claimOpen(m), m); } catch (e) { log('绑定前诊断没记上：' + e); } }
 	if (claimed) {
 		wifiApply(b, cmdsDisabled(ours, true));
 		fs.unlink(etc('temp-off'));
@@ -560,7 +623,7 @@ function claimStep(id) {
 	}
 	const temp = filter(ours, f => f.enc == '' || f.enc == 'none');   // 还没设密码的家长 WiFi
 	if (!length(temp)) return;
-	const open = m < +(fs.readfile(tmp('claim-from')) ?? 0) + CLAIM_OPEN;
+	const open = claimOpen(m);
 	if (open && off) {
 		wifiApply(b, cmdsDisabled(temp, true));
 		fs.unlink(etc('temp-off'));
@@ -655,9 +718,12 @@ function inboxStep(id) {
 }
 function checkin(id, c) {
 	const on = wifiState(wifiBins(), map(c.nets, n => n.key)) ?? {};
-	const r = call(id, 'checkin', { version: VERSION, updater: '', lastUpgrade: 0, claimed: length(c.parents?.parents ?? []) > 0,
-		kidNets: length(filter(keys(on), k => on[k])), memberUntil: c.member?.x ?? 0, haveCurrent: true });
-	if (!r?.ok) return false;
+	const env = envSafe();
+	let uv = '';
+	try { uv = updaterVersion(); } catch (e) { uv = ''; }
+	const r = call(id, 'checkin', { version: VERSION, updater: uv, lastUpgrade: 0, claimed: length(c.parents?.parents ?? []) > 0,
+		kidNets: length(filter(keys(on), k => on[k])), memberUntil: c.member?.x ?? 0, haveCurrent: true, ...(env ? { env } : {}) });
+	if (!r?.ok) { log('代升级程序报到没成功：' + (r?.error ?? '连不上云端或回包不对') + '，稍后再试'); return false; }
 	const lt = localtime(now());
 	writeJson(etc('checkin.json'), { day: today(lt), at: now() });
 	applyCheckin(id, r);
@@ -803,19 +869,53 @@ function remoteStep(id, c) {
 	return did;
 }
 
+// 升级程序的看护（它负责每日报到，它出问题云端就收不到这台）：
+// 没装上 → 每 6 小时在后台补装一次（updater-fix，开机时服务启动已经补过一轮）；
+// 装着但 3 天没报到成功（服务停了、在用的副本坏了）→ 改用出厂副本、重启升级程序服务（每天最多一次）。
+// 这两种情况返回 false，管控程序自己每天报到一次，云端不会失联
+const UPD_FIX_GAP = 6 * 3600, UPD_STALE = 3 * 86400;
+let updFrom = null, updFixAt = null, updKickAt = null;
+function updaterOk(m) {
+	if (updFrom == null) { updFrom = m - +(getenv('DOTI_UPD_AGE') || 0); updFixAt = updFrom; }   // DOTI_UPD_AGE：测试用，当作已经看了这么多秒
+	if (!exists(cfg.updater)) {
+		if (m - updFixAt >= UPD_FIX_GAP) {
+			updFixAt = m;
+			log('升级程序没装上，后台再试着补装');
+			system(sprintf('%s 3 >/dev/null 2>&1 </dev/null &', shq(cfg.updFix)));
+		}
+		return false;
+	}
+	const at = readJson(cfg.updDir + '/checkin.json', null)?.at ?? 0;
+	if (now() - at <= UPD_STALE || m - updFrom <= UPD_STALE) return true;
+	if (updKickAt == null || m - updKickAt >= 86400) {
+		updKickAt = m;
+		const act = trim(fs.readfile(cfg.updDir + '/active') ?? '');
+		if (act) fs.unlink(cfg.updDir + '/active');
+		log('升级程序 3 天没报到成功，' + (act ? '改用出厂副本、' : '') + '重启升级程序；这期间由管控程序每天报到');
+		system(sprintf('%s enable >/dev/null 2>&1; %s restart >/dev/null 2>&1 </dev/null', shq(cfg.updInitd), shq(cfg.updInitd)));
+	}
+	return false;
+}
+
 function cloudStep(id, c) {
 	if (takeMark('unregistered')) lostRegistration(id);
 	const m = mono(), want = takeMark('register');
 	if (!id.registered) {
 		if (retryDue(regRetry, m) || (want && m - regLast >= 30)) {
 			regLast = m;
+			// 身份还没写进闪存：先补写，写不进去就先不登记
+			if (id.unsaved) {
+				delete id.unsaved;
+				if (!writeSecret(etc('identity.json'), id)) { id.unsaved = true; retryFail(regRetry, m, 60, 3600); return; }
+				log('设备身份已写进闪存');
+			}
 			if (register(id)) retryOk(regRetry);
 			else retryFail(regRetry, m, 60, 3600);
 		}
 		return;
 	}
 	inboxStep(id);
-	if (!exists(cfg.updater) && retryDue(ckRetry, m) && checkinDue(id, now())) {
+	if (!updaterOk(m) && retryDue(ckRetry, m) && checkinDue(id, now())) {
 		if (checkin(id, c)) retryOk(ckRetry);
 		else retryFail(ckRetry, m, 60, 3600);
 		return;
@@ -825,15 +925,13 @@ function cloudStep(id, c) {
 	if (bk.ver > bk.sentVer && now() >= bk.dueAt && retryDue(bk, m)) backupUpload(id, c);
 }
 
-// 基本状态（路由器管理页 LuCI 只读显示用）：不含设备 ID、密钥、密码
+// 基本状态（路由器管理页 LuCI 只读显示用）：不含设备 ID、密钥、密码（rootTemp 是公开的临时默认密码，正在用时才带）
 function info() {
 	const id = readJson(etc('identity.json'), null) ?? {}, st = fs.stat(tmp('status.json'));
 	const u = updRecords(), ck = u.ck, up = u.up;
-	const act = trim(fs.readfile(cfg.updDir + '/active') ?? '');
-	const uv = match((act ? fs.readfile(cfg.updDir + '/slot-' + act + '/doti-update.uc') : null) ?? fs.readfile('/usr/share/doti-updater/doti-update.uc') ?? '', /const VERSION = '([^']+)'/);
-	return { version: VERSION, released: trim(fs.readfile('/usr/share/doti/released') ?? ''), updater: uv ? uv[1] : '', running: exists(tmp('running')) && !!st && now() - st.mtime < 90,
+	return { version: VERSION, released: trim(fs.readfile('/usr/share/doti/released') ?? ''), updater: updaterVersion(), running: exists(tmp('running')) && !!st && now() - st.mtime < 90,
 		code: id.code ?? '', registered: !!id.registered, parents: length(readJson(etc('parents.json'), null)?.parents ?? []), kidNets: length(nets()),
-		parentWifi: adminSsid(id.code), lastCheckin: ck?.at ?? 0,
+		parentWifi: adminSsid(id.code), lastCheckin: ck?.at ?? 0, rootTemp: rootKind(sha256) == 'temp' ? ROOT_TEMP_PW : '',
 		...(up ? { lastUpgrade: { from: up.prev, to: up.to, result: up.result, reason: up.reason ?? '', at: up.at } } : {}) };
 }
 
@@ -853,7 +951,7 @@ function run() {
 	st = readJson(tmp('state.json'), null) ?? readJson(etc('state.json'), {});
 	det = detCreate(readJson(etc('baseline.json'), null));
 	lastBaseSave = mono();
-	let nextTick = 0, nextRrm = mono() + 30, seen = gen();
+	let nextTick = 0, nextRrm = mono() + 30, seen = gen(), cloudErr = '', cloudErrAt = -1e9;
 	// 开机先用上次云端告诉的
 	freeIps = freeIpList({ freeIps: split(trim(fs.readfile(etc('free-ips')) ?? ''), '\n') });
 	setApplied(seen);
@@ -869,7 +967,9 @@ function run() {
 			seen = g;
 		}
 		else if (m >= nextTick) { tick(id, c); nextTick = m + TICK; }
-		cloudStep(id, c);
+		// 云端这一步出任何错都不影响管控（同样的错 10 分钟只记一次日志），下一圈照常再试
+		try { cloudStep(id, c); }
+		catch (e) { const s = '' + e; if (s != cloudErr || m - cloudErrAt >= 600) { cloudErr = s; cloudErrAt = m; log('云端这一步出错：' + s); } }
 		baseApply(c);   // 不限速地址变了马上生效（规则没变时 baseApply 什么都不做）
 		claimStep(id);
 		rootStep(id);
@@ -921,6 +1021,16 @@ function stop() {
 	return 0;
 }
 
+// 卸载前尽力告诉云端一声（主程序包卸载脚本里调，限时几秒，失败不影响卸载）：
+// 已登记才发；升级程序正在装包（拿着它的锁）说明是升级不是卸载，不发
+function bye() {
+	const id = readJson(etc('identity.json'), null);
+	if (!id?.registered || !id?.key || !id?.id) return 0;
+	if (exists((getenv('DOTI_UPD_TMP') || '/tmp') + '/doti-updater.lock')) return 0;
+	const r = cloudPost(hmacSha256, id, 'uninstall', now(), {}, '/tmp');
+	log(r?.ok ? '卸载：已告诉云端' : '卸载：没连上云端，照样卸载');
+	return 0;
+}
 
 const cmd = ARGV[0];
 if (cmd == 'run') exit(run());
@@ -931,4 +1041,5 @@ else if (cmd == 'status') { print(sprintf('%J\n', readJson(tmp('status.json'), {
 else if (cmd == 'stop') exit(stop());
 else if (cmd == 'bell') exit(bell());
 else if (cmd == 'unbind') exit(unbind(ARGV[1] == '--remote'));
-else { warn('用法：doti run | init | id | status | stop | bell | unbind\n'); exit(2); }
+else if (cmd == 'bye') exit(bye());
+else { warn('用法：doti run | init | id | status | stop | bell | unbind | bye\n'); exit(2); }

@@ -114,6 +114,7 @@ The durations above are only examples — parents set their own.
 - A timezone still set to UTC becomes Asia/Shanghai; flow offloading is turned off if enabled (otherwise limits and counters don't apply).
 - Missing dependencies are installed (usually just `mosquitto-client-nossl` and a few small libraries), trying mirrors in China first; your package feed configuration isn't changed.
 - If root has no password, it's set to the parents' Wi-Fi password after pairing; a password you set yourself is kept.
+- Before pairing, while the password-free parents' Wi-Fi is open (30 minutes), a root account with no password temporarily gets the default password `Passwd4Doti` (so whoever joins that Wi-Fi can't walk into LuCI / SSH); once the parents' Wi-Fi closes, it's blank again. A password you set with `passwd` in the meantime is left alone.
 
 ## Technical features
 

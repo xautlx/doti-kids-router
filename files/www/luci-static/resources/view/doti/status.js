@@ -26,7 +26,10 @@ return view.extend({
 					row('主程序版本', d.version ? d.version + (d.released ? '（' + d.released + '）' : '') : '—'),
 					row('路由器编号', d.code || '—'),
 					row('家长 WiFi', d.parentWifi || '—')
-				])
+				]),
+				d.rootTemp ? E('div', { 'class': 'alert-message warning', 'style': 'margin-top:10px' },
+					'不用密码的家长 WiFi 开放期间，路由器管理后台（LuCI / SSH）的 root 临时用默认密码 ' + d.rootTemp +
+					'，家长 WiFi 关闭后恢复原样；绑定后换成家长 WiFi 密码。想用自己的密码可以执行 passwd 修改，自己改过的不会被动。') : ''
 			])
 		]);
 	},

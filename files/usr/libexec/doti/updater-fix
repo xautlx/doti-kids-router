@@ -1,0 +1,57 @@
+#!/bin/sh
+# 升级程序没装上时补装（主程序包里带着升级程序的包：ipk 或 apk）。
+# 服务启动时、管控程序发现升级程序还没装上时（每 6 小时）在后台跑；同一时间只跑一份。
+# 每次先不联网装（依赖系统都自带时最快），装不上再联网装（opkg 先更新软件源列表）；
+# 结果和失败原因写系统日志（logread -e doti 能看到），方便贴出来排查。
+# 用法：updater-fix [试几次]（默认 10 次，每次之前等 20 秒）
+U=${DOTI_UPD_PKG:-/usr/share/doti/doti-updater}
+BIN=${DOTI_UPDATER:-/usr/sbin/doti-update}
+OPKG=${DOTI_OPKG:-opkg}
+APK=${DOTI_APK:-apk}
+GAP=${DOTI_FIX_GAP:-20}
+LOCK=${DOTI_FIX_LOCK:-/tmp/doti-updater-fix.pid}
+N=${1:-10}
+
+log() {
+	logger -t doti "$*" 2>/dev/null
+	[ -n "${DOTI_LOGFILE:-}" ] && echo "$*" >> "$DOTI_LOGFILE"
+	return 0
+}
+# 限时执行：软件源连不上时 opkg update / apk 可能卡很久
+lim() { s=$1; shift; "$@" & p=$!; ( sleep "$s"; kill "$p" 2>/dev/null ) </dev/null >/dev/null 2>&1 & w=$!; wait "$p"; r=$?; kill "$w" 2>/dev/null; return $r; }
+# 出错信息只留最后一行有内容的
+last() { printf '%s\n' "$1" | grep -v '^[[:space:]]*$' | tail -1; }
+
+[ -x "$BIN" ] && exit 0
+if [ -f "$U.apk" ]; then PKGF="$U.apk"; elif [ -f "$U.ipk" ]; then PKGF="$U.ipk"; else
+	log "升级程序没装上，主程序包里也没有升级程序的包，没法补装"
+	exit 1
+fi
+# 已经有一份在补装就不再起
+if [ -f "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then exit 0; fi
+echo $$ > "$LOCK"
+trap 'rm -f "$LOCK"' EXIT
+
+i=0; err=""; updated=""
+while [ "$i" -lt "$N" ]; do
+	i=$((i + 1))
+	sleep "$GAP"
+	[ -x "$BIN" ] && exit 0
+	if [ "$PKGF" = "$U.apk" ]; then
+		out=$("$APK" add --allow-untrusted --no-network "$PKGF" 2>&1); rc=$?
+		[ "$rc" = 0 ] || { out=$(lim 240 "$APK" add --allow-untrusted "$PKGF" 2>&1); rc=$?; }
+	else
+		out=$("$OPKG" install "$PKGF" 2>&1); rc=$?
+		if [ "$rc" != 0 ] && [ -z "$updated" ]; then
+			updated=1
+			lim 180 "$OPKG" update >/dev/null 2>&1
+			out=$("$OPKG" install "$PKGF" 2>&1); rc=$?
+		fi
+	fi
+	if [ "$rc" = 0 ] && [ -x "$BIN" ]; then log "升级程序补装成功（第 $i 次）"; exit 0; fi
+	err=$(last "$out")
+	log "升级程序补装失败（第 $i 次）：${err:-没有出错信息}"
+done
+if [ "$PKGF" = "$U.apk" ]; then how="apk add --allow-untrusted $PKGF"; else how="opkg update && opkg install $PKGF"; fi
+log "升级程序补装 $N 次都没成功，之后每 6 小时再试；也可以手工补装：$how"
+exit 1

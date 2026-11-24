@@ -46,7 +46,17 @@ function send(code, obj) {
 	return true;
 }
 function ok(obj) { return send(200, { ok: true, ...(obj ?? {}) }); }
-function fail(code, extra) { return send(HTTP[code] ?? 409, { ok: false, error: code, msg: MSG[code] ?? code, ...(extra ?? {}) }); }
+// 绑定前诊断：绑定请求（claim）来过几次、最近一次失败的错误码（管控程序汇总进 prebind.json）
+let curEp = '';
+function claimNote(err) {
+	const f = tmp('claim-stats.json'), x = readJson(f, null), s = type(x) == 'object' ? x : { n: 0, err: '' };
+	if (err == null) s.n = (type(s.n) == 'int' ? s.n : 0) + 1; else s.err = substr('' + err, 0, 24);
+	writeJson(f, s);
+}
+function fail(code, extra) {
+	if (curEp == 'claim') { try { claimNote(code); } catch (e) {} }
+	return send(HTTP[code] ?? 409, { ok: false, error: code, msg: MSG[code] ?? code, ...(extra ?? {}) });
+}
 
 // ---------- 地址 ----------
 function uciGet(k) {
@@ -463,6 +473,7 @@ H.wifi = (c) => {
 // ---------- 处理顺序 ----------
 function handle() {
 	const t = now(), port = env('SERVER_PORT'), parts = split(env('SCRIPT_NAME'), '/'), ep = parts[length(parts) - 1];
+	if (ep == 'claim') { curEp = ep; try { claimNote(null); } catch (e) {} }
 	if (env('HTTP_ORIGIN') != '') return fail('FORBIDDEN_ORIGIN');
 	const hp = split(env('HTTP_HOST'), ':');
 	const a = addrs(), hosts = [a.lan?.ip, ...map(a.kids ?? [], k => k.ip)];

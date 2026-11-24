@@ -3,7 +3,7 @@
 'use strict';
 import * as fs from 'fs';
 
-const VERSION = '2.0.0';
+const VERSION = '2.0.1';
 const PKG = 'doti-kids-router', UPKG = 'doti-kids-router-updater';
 const cfg = {
 	dir: getenv('DOTI_UPD_DIR') || '/etc/doti-updater',
@@ -246,12 +246,15 @@ function download(o, f, p) {
 function freeKB() { const m = match(sh('df -k ' + shq(cfg.overlay) + ' 2>/dev/null | tail -1'), /[ \t]([0-9]+)[ \t]+[0-9]+%/); return m ? +m[1] : 1e9; }
 
 // ---------- 锁 ----------
+// held：这个进程拿着锁（出异常时据此放掉）
+let held = false;
 function lock() {
 	const l = cfg.tmp + '/doti-updater.lock', st = fs.stat(l);
 	if (st && time() - st.mtime > LOCK_STALE) { fs.rmdir(l); log('清掉残留的锁'); }
-	return fs.mkdir(l) != null;
+	held = fs.mkdir(l) != null;
+	return held;
 }
-function unlock() { fs.rmdir(cfg.tmp + '/doti-updater.lock'); }
+function unlock() { fs.rmdir(cfg.tmp + '/doti-updater.lock'); held = false; }
 
 // ---------- 放开网络 ----------
 // 停管控、删掉一点守护的全部规则表（限速、屏蔽、统计），孩子网络全部放开。管控程序坏到停不下来也照样删表。
@@ -295,7 +298,7 @@ function result(prev, to, res, reason) {
 	writeJson(F('last.json'), { prev, to, result: res, reason: reason ?? '', at: now(), sent: false });
 	log(sprintf('升级 %s → %s：%s%s', prev, to, res, reason ? '（' + reason + '）' : ''));
 }
-function bad() { return readJson(F('bad.json'), []); }
+function bad() { const b = readJson(F('bad.json'), []); return type(b) == 'array' ? b : []; }
 function markBad(v) { const b = bad(); if (index(b, v) < 0) push(b, v); writeJson(F('bad.json'), b); }
 function rollback(prev, to, why) {
 	markBad(to);
@@ -311,7 +314,7 @@ function rollback(prev, to, why) {
 }
 
 // ---------- 安装 ----------
-function haveCurrent() { return !!fs.stat(cur()) && readJson(F('current.json'), {}).version == installed(); }
+function haveCurrent() { return !!fs.stat(cur()) && readJson(F('current.json'), null)?.version == installed(); }
 function install(o) {
 	const prev = installed(), p = pkgOf(o);
 	if (o.version == prev) return;
@@ -412,16 +415,24 @@ function inbox(r) {
 	fs.writefile(cfg.run + '/gen.tmp', '' + g); fs.rename(cfg.run + '/gen.tmp', cfg.run + '/gen');
 }
 
-// 报到带的环境信息（给统计分析：系统版本和平台、存储内存、开机时长、无线频段数、家里各类设备数量）；取不到的项不带
+// CPU / SoC 描述（ubus call system board 的 system 字段）；读不到回空串
+function chip() {
+	let b = null;
+	try { b = json(sh(cfg.ubus + ' -t 3 call system board 2>/dev/null') || 'null'); } catch (e) { b = null; }
+	return type(b?.system) == 'string' ? substr(trim(b.system), 0, 64) : '';
+}
+// 报到带的环境信息（给统计分析：发行版和系统版本、平台、芯片、存储内存、开机时长、无线频段数、家里各类设备数量）；取不到的项不带
 function envInfo() {
-	const e = {}, r = fs.readfile(cfg.sys + '/etc/openwrt_release') ?? '', K = { RELEASE: 'os', REVISION: 'rev', TARGET: 'target', ARCH: 'arch' };
+	const e = {}, r = fs.readfile(cfg.sys + '/etc/openwrt_release') ?? '', K = { ID: 'id', RELEASE: 'os', REVISION: 'rev', TARGET: 'target', ARCH: 'arch' };
 	for (let k in K) {
 		const m = match(r, regexp("DISTRIB_" + k + "='([^']*)'"));
-		if (m) e[K[k]] = substr(m[1], 0, 40);
+		if (m && m[1] != '') e[K[k]] = substr(m[1], 0, 40);
 	}
 	const board = trim(fs.readfile(cfg.sys + '/tmp/sysinfo/board_name') ?? ''), model = trim(fs.readfile(cfg.sys + '/tmp/sysinfo/model') ?? '');
 	if (board) e.board = substr(board, 0, 64);
 	if (model) e.model = substr(model, 0, 64);
+	const c = chip();
+	if (c) e.chip = c;
 	e.pm = pm();
 	const df = match(sh('df -k ' + shq(cfg.overlay) + ' 2>/dev/null | tail -1'), /[ \t]([0-9]+)[ \t]+[0-9]+[ \t]+([0-9]+)[ \t]+[0-9]+%/);
 	if (df) { e.flashKB = +df[1]; e.flashFreeKB = +df[2]; }
@@ -436,15 +447,33 @@ function envInfo() {
 	if (type(devs) == 'object') { const n = {}; for (let mac in devs) { const t = devs[mac]?.type ?? 'other'; n[t] = (n[t] ?? 0) + 1; } e.devs = n; }
 	return e;
 }
+// 采集出任何错都只是不带 env，不影响报到（DOTI_ENV_FAIL 是测试用的，设了就让采集出异常）
+function envSafe() {
+	try {
+		if (getenv('DOTI_ENV_FAIL')) die('DOTI_ENV_FAIL');
+		return envInfo();
+	} catch (e) {
+		log('采集环境信息出错，这次报到不带：' + e);
+		return null;
+	}
+}
+// 绑定前诊断（主程序没绑定时写 /tmp/doti/prebind.json）：只有计数和状态；读不到、不像样就不带
+function prebind() {
+	if (claimed()) return null;
+	const p = readJson(cfg.run + '/prebind.json', null);
+	return type(p) == 'object' ? p : null;
+}
 // 上次报到云端回的错误（LIMIT：两次报到不到 60 秒，云端不收）
 let lastErr = null;
 function checkin() {
 	const id = identity();
 	lastErr = null;
 	if (!id.registered) return null;
-	const last = readJson(F('last.json'), null), m = readJson(cfg.etc + '/member.json', null);
+	const last = readJson(F('last.json'), null), m = readJson(cfg.etc + '/member.json', null), env = envSafe();
+	let pb = null;
+	try { pb = prebind(); } catch (e) { pb = null; }
 	const r = post('checkin', { version: installed(), updater: VERSION, lastUpgrade: last && !last.sent ? { 'from': last.prev, to: last.to, result: last.result, reason: last.reason, at: last.at } : null,
-		claimed: claimed(), kidNets: kidNets(), memberUntil: m?.x ?? 0, haveCurrent: haveCurrent(), env: envInfo() });
+		claimed: claimed(), kidNets: kidNets(), memberUntil: m?.x ?? 0, haveCurrent: haveCurrent(), ...(env ? { env } : {}), ...(pb ? { prebind: pb } : {}) });
 	lastErr = r?.error ?? null;
 	if (r?.error == 'CLOCK') { clockFix(r.now); return null; }
 	if (r?.error == 'NOT_REGISTERED') { fs.mkdir(cfg.run, 0700); fs.writefile(cfg.run + '/unregistered.now', '' + now()); log('云端没有这台的记录，通知主程序重新登记'); return null; }
@@ -476,7 +505,7 @@ function checkinAndAct() {
 // 再卡就一直放开，等报到报上去、发新版本修）。记录放内存（/tmp/doti/watchdog.json），重启路由器就清零
 const WD_STALE = 600, WD_RESTARTS = 3;
 function watchdog() {
-	const f = cfg.run + '/watchdog.json', w = readJson(f, null) ?? {}, up = uptime(), m = mtime(cfg.run + '/status.json'), day = today(now());
+	const f = cfg.run + '/watchdog.json', r0 = readJson(f, null), w = type(r0) == 'object' ? r0 : {}, up = uptime(), m = mtime(cfg.run + '/status.json'), day = today(now());
 	if (w.day != day) { w.day = day; w.n = 0; }
 	if (!m || !rulesOn()) { w.m = m; w.since = up; writeJson(f, w); return; }
 	if (m != w.m) { w.m = m; w.since = up; writeJson(f, w); return; }
@@ -501,11 +530,64 @@ function installPending() {
 	unlock();
 }
 
+// 装好后的报到节奏（按装好多久）：5、15、30 分钟各一次；第 1 天每小时；第 2–7 天每 2 小时；第 2 周每 6 小时；
+// 之后只有每天凌晨那次（另算，一直都在）。间隔加 ±10% 随机。装好的时间记在 installed-at（{ id, at }），身份变了（重装、解除绑定）从头算；
+// 第一次记时用设备身份文件的时间（主程序登记成功时写的；老设备升级上来不会从头加报）。
+// 时钟没对过（早于 2024 年）时：新装的按开机时长算，以前记过的这段时间不加报（只靠每天那次和开机补报）
+const RAMP_FIRST = [300, 900, 1800], CLOCK_MIN = 1704067200;
+function rampGap(a) { return a < 86400 ? 3600 : a < 7 * 86400 ? 7200 : a < 14 * 86400 ? 21600 : 0; }
+let ramp = { id: null, up0: null, last: null, jit: 1 };
+// 装好多久（秒）；算不出来回 null
+function installAge(id) {
+	if (!id) return null;
+	const t = now(), clockOk = t >= CLOCK_MIN, up = uptime();
+	let f = readJson(F('installed-at'), null);
+	if (ramp.id != id) {
+		ramp = { id, up0: null, last: null, jit: 1 };
+		const ck = readJson(F('checkin.json'), null);
+		if (f?.id == id && f.at && clockOk && ck?.at >= f.at) ramp.last = ck.at - f.at;   // 重启后接着上次的节奏
+	}
+	if (f?.id != id) {
+		const im = mtime(cfg.etc + '/identity.json');
+		f = { id, at: clockOk ? (im >= CLOCK_MIN && im < t ? im : t) : 0 };
+		writeJson(F('installed-at'), f);
+		if (!clockOk) ramp.up0 = up;
+	}
+	if (clockOk) {
+		if (!f.at || f.at > t) {
+			f.at = t - (ramp.up0 != null ? up - ramp.up0 : 0);
+			writeJson(F('installed-at'), f);
+		}
+		return t - f.at;
+	}
+	return ramp.up0 != null ? up - ramp.up0 : null;
+}
+// 这时候该不该按节奏加报一次（a：装好多久）
+function rampDue(a) {
+	if (a == null || a >= 14 * 86400) return false;
+	for (let x in RAMP_FIRST) if (a >= x && (ramp.last == null || ramp.last < x)) return true;
+	const g = rampGap(a);
+	return a >= 1800 && g > 0 && (ramp.last == null || a - ramp.last >= g * ramp.jit);
+}
+// 一圈里的每一步单独兜住：出任何错只记日志（同样的错 10 分钟一次），放掉锁，常驻进程不退出，下一圈照常
+let stepErr = '', stepErrAt = 0;
+function guard(name, fn) {
+	try { return fn(); }
+	catch (e) {
+		if (held) unlock();
+		// 装到一半出的错：照断电收尾那样体检、不行就回滚
+		if (fs.stat(F('state.json')) && lock()) { try { finishPending(); } catch (x) { failOpen(); } unlock(); }
+		const s = name + '：' + e;
+		if (s != stepErr || time() - stepErrAt >= 600) { stepErr = s; stepErrAt = time(); log('出错了（' + s + '），下一圈再试'); }
+		return null;
+	}
+}
+
 function daemon() {
 	fs.mkdir(cfg.dir, 0700);
 	if (lock()) { finishPending(); unlock(); }
 	const ck = readJson(F('checkin.json'), null);
-	let fails = 0, retryAt = 0;
+	let fails = 0, retryAt = 0, okDay = '';
 	// 开机补报：一天没报到过；或者刚开机（开机 15 分钟内）、又不在服务期内——服务期外不连门铃，
 	// 家长不在家续了费，断电重开路由器也能让它 5–30 分钟内取到新凭证
 	const up = fs.readfile(getenv('DOTI_UPTIME') || '/proc/uptime'), boot = up != null && +split(up, ' ')[0] < 900;
@@ -516,22 +598,27 @@ function daemon() {
 		const t = now(), id = identity(), lt = localtime(t), sec = lt.hour * 3600 + lt.min * 60 + lt.sec;
 		const c = readJson(F('checkin.json'), null);
 		const want = nowWanted(), flag = want ? nowFlag() : '';
-		const due = id.registered && ((catchUp && t >= catchUp) || (retryAt && t >= retryAt) || (want && !retryAt) ||
-			(!retryAt && c?.day != today(t) && sec >= slot(id.id ?? '') && sec < 6 * 3600));
+		const age = guard('装好时间', () => installAge(id.id ?? ''));
+		const daily = c?.day != today(t) && okDay != today(t) && sec >= slot(id.id ?? '') && sec < 6 * 3600;
+		const due = id.registered && ((catchUp && t >= catchUp) || (retryAt && t >= retryAt) || (want && !retryAt) || (!retryAt && (daily || rampDue(age))));
 		if (due) {
-			const r = checkinAndAct();
+			const r = guard('报到', checkinAndAct);
 			if (r) {
-				fails = 0; retryAt = 0; catchUp = 0;
+				fails = 0; retryAt = 0; catchUp = 0; okDay = today(t);
+				ramp.last = age; ramp.jit = 0.9 + rnd() * 0.2;
 				if (want) { writeJson(F('updnow.json'), { v: flag, at: t }); log('马上检查升级：已报到' + (r.target || r.updater ? '，有新版本，马上装' : '，没有新版本')); }
-				if (r.updater && selfUpdate(r.updater)) return 0;
-				if (want && fs.stat(F('pending.json'))) installPending();
+				if (r.updater && guard('升级程序自更新', () => selfUpdate(r.updater))) return 0;
+				if (want && fs.stat(F('pending.json'))) guard('安装', installPending);
 			}
 			// 报得太勤（刚报过不到 60 秒，比如马上检查升级时刚换了升级程序）：65 秒后再报，不算失败、不退避
 			else if (lastErr == 'LIMIT') retryAt = t + 65;
-			else if (++fails <= length(RETRY)) retryAt = t + int(RETRY[fails - 1] * (0.7 + rnd() * 0.6));
-			else { fails = 0; retryAt = 0; catchUp = 0; }
+			else {
+				log('报到没成功：' + (lastErr ?? '连不上云端或回包不对') + (fails < length(RETRY) ? '，稍后再试' : '，今天先不试了，等下一次'));
+				if (++fails <= length(RETRY)) retryAt = t + int(RETRY[fails - 1] * (0.7 + rnd() * 0.6));
+				else { fails = 0; retryAt = 0; catchUp = 0; ramp.last = age; }   // 这一轮放弃：按节奏等下一次，不连着重试
+			}
 		}
-		else if (fs.stat(F('pending.json')) && t >= (readJson(F('dlfail.json'), {}).next ?? 0)) {
+		else if (fs.stat(F('pending.json')) && t >= (readJson(F('dlfail.json'), null)?.next ?? 0)) guard('安装', () => {
 			const p = readJson(F('pending.json'), null);
 			let urgent = false;
 			try { urgent = json(p?.info ?? '{}')?.urgent === true; } catch (e) {}
@@ -540,8 +627,8 @@ function daemon() {
 				if (!o || install(o) != 'retry') fs.unlink(F('pending.json'));
 				unlock();
 			}
-		}
-		if (!fs.stat(cfg.tmp + '/doti-updater.lock')) watchdog();   // 升级、回滚时不看（那时本来就停着）
+		});
+		if (!fs.stat(cfg.tmp + '/doti-updater.lock')) guard('看门狗', watchdog);   // 升级、回滚时不看（那时本来就停着）
 		if (getenv('DOTI_UPD_ONCE')) break;
 		// 每分钟一圈；中间每 5 秒看一眼要不要马上检查升级，有就提前进下一圈
 		for (let i = 0; i < 12 && !nowWanted(); i++) sleep(5000);

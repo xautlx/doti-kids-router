@@ -70,9 +70,15 @@ rm -rf /tmp/luci-indexcache* /tmp/luci-modulecache 2>/dev/null
 /etc/init.d/rpcd reload 2>/dev/null
 exit 0
 """
-# 停服务、删三张表
+# 停服务、删三张表。真正卸载（不是升级：opkg 升级时参数是 upgrade，apk 升级不跑这个脚本）前尽力告诉云端一声，
+# 最多等 3 秒，失败不影响卸载
 PRERM = """#!/bin/sh
 [ -n "${IPKG_INSTROOT}" ] && exit 0
+if [ "$1" != upgrade ] && [ -x /usr/sbin/doti ]; then
+	/usr/sbin/doti bye >/dev/null 2>&1 & p=$!
+	( sleep 3; kill $p 2>/dev/null ) >/dev/null 2>&1 & w=$!
+	wait $p 2>/dev/null; kill $w 2>/dev/null
+fi
 /etc/init.d/doti stop 2>/dev/null
 /etc/init.d/doti disable 2>/dev/null
 for t in doti doti_limit doti_dns; do nft delete table inet $t 2>/dev/null; done

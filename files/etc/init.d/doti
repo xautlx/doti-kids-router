@@ -16,12 +16,9 @@ start_service() {
 	procd_set_param command "$PROG" bell
 	procd_set_param respawn 3600 30 0
 	procd_close_instance
-	# 升级程序没装就补装（ipk 包里带 .ipk，apk 包里带 .apk；apk 先不联网装，省掉下载软件源索引）；
-	# 关掉继承来的 procd 锁（fd 1000），不然循环期间 enable、restart 都要排队等它
-	local u=/usr/share/doti/doti-updater
-	[ -x /usr/sbin/doti-update ] || [ ! -f $u.ipk -a ! -f $u.apk ] || \
-		( for i in 1 2 3 4 5 6 7 8 9 10; do sleep 20; [ -x /usr/sbin/doti-update ] && break
-			if [ -f $u.apk ]; then { apk add --allow-untrusted --no-network $u.apk || apk add --allow-untrusted $u.apk; } && break; else opkg install $u.ipk && break; fi; done ) >/dev/null 2>&1 </dev/null 1000>&- &
+	# 升级程序没装就在后台补装（包里带着；失败原因写系统日志，管控程序之后每 6 小时再试）；
+	# 关掉继承来的 procd 锁（fd 1000），不然补装期间 enable、restart 都要排队等它
+	[ -x /usr/sbin/doti-update ] || /usr/libexec/doti/updater-fix >/dev/null 2>&1 </dev/null 1000>&- &
 	[ -x /usr/sbin/dnsmasq ] || return 0
 	# 每个孩子网络一个屏蔽名单 DNS（k1/k2/k3 → 5390/5391/5392），各读各的 block-kN.conf，由主程序写
 	mkdir -p /tmp/doti /var/etc
