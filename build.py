@@ -141,7 +141,9 @@ UCLEAR = """rm -rf /etc/doti-updater/slot-a /etc/doti-updater/slot-b /etc/doti-u
 UPOSTINST = """#!/bin/sh
 [ -n "${IPKG_INSTROOT}" ] && exit 0
 """ + UCLEAR + """/etc/init.d/doti-updater enable
-/etc/init.d/doti-updater restart
+# 不用 restart：升级时旧包的 prerm 已经停了服务，restart 里的 stop 找不到服务会打一行「Command failed … Not found」，像装错了
+/etc/init.d/doti-updater stop 2>/dev/null
+/etc/init.d/doti-updater start
 exit 0
 """
 # 不删 /etc/doti-updater
@@ -287,7 +289,7 @@ def build_apk():
     if not shutil.which('apk'):
         sys.exit('打 apk 包要 apk-tools 3（apk mkpkg），本机没有；GitHub Actions 在 Alpine 容器里打')
     data, _ = tree(UFILES, ('usr/sbin/', 'etc/init.d/'))
-    post, upgrade, prerm = apk_scripts(UPKG, extra_post='[ -n "${IPKG_INSTROOT}" ] || ' + UCLEAR, restart='/etc/init.d/doti-updater restart\n', extra_prerm=UPRERM.split('\n', 2)[2].rsplit('exit 0', 1)[0])
+    post, upgrade, prerm = apk_scripts(UPKG, extra_post='[ -n "${IPKG_INSTROOT}" ] || ' + UCLEAR, restart='/etc/init.d/doti-updater stop 2>/dev/null\n/etc/init.d/doti-updater start\n', extra_prerm=UPRERM.split('\n', 2)[2].rsplit('exit 0', 1)[0])
     uout = os.path.join(HERE, 'dist', f'{UPKG}-{UVERSION}-r1.apk')
     apk(uout, UPKG, UVERSION, UDEPENDS, UDESC, [('post-install', post), ('post-upgrade', upgrade), ('pre-deinstall', prerm)], data)
     print(uout, f'{os.path.getsize(uout)} 字节')

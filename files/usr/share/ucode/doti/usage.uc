@@ -100,3 +100,40 @@ export function devInfo(base, cur, names) {
 		return { name, host, type };
 	};
 };
+
+// 一天的计数（报到带上，看路由器替家长干了多少活；口径和云端每日摘要的 ev 一样）：各孩子网络加起来
+//   nets 几个网络, open / limit 开放 / 限速时在用分钟（按小时取整再加）, round 智能降速轮数, fixed 限速时段触发, quota 用满每天最多的网络数,
+//   temp 临时安排次数, tempMin 临时开放分钟, rule 改规则次数, start 智能开放开始计时次数（开机时的初始状态不算）
+export function counts(day) {
+	const c = { nets: 0, open: 0, limit: 0, round: 0, fixed: 0, quota: 0, temp: 0, tempMin: 0, rule: 0, start: 0 }, ks = {};
+	for (let key in keys(day ?? {})) {
+		if (substr(key, 0, 1) == '_' || type(day[key]) != 'object') continue;
+		ks[key] = true;
+		for (let h in keys(day[key])) { const v = day[key][h]; c.open += int((v?.a ?? 0) / 60.0 + 0.5); c.limit += int((v?.l ?? 0) / 60.0 + 0.5); }
+	}
+	for (let key in keys(day?._ev ?? {})) {
+		ks[key] = true;
+		let quota = false;
+		for (let e in (day._ev[key] ?? [])) {
+			if (e.e == 'p' && !e.d && e.p == 'smartLimit' && e.x) c.round++;
+			else if (e.e == 'p' && e.p == 'quotaDone') quota = true;
+			else if (e.e == 's') { c.temp++; if (e.a == 'open') c.tempMin += e.m ?? 0; }
+			else if (e.e == 'r') c.rule++;
+			if (e.e == 'p' && !e.d && e.p == 'fixedLimit') c.fixed++;
+			else if (e.e == 'u') c.start++;
+		}
+		if (quota) c.quota++;
+	}
+	c.nets = length(keys(ks));
+	return c;
+};
+
+// 最近几天的计数（autocount.json）：记上这一天，只留最近 n 天
+export function countsKeep(all, date, c, n) {
+	const out = { ...(type(all) == 'object' ? all : {}) };
+	out[date] = c;
+	const ds = sort(filter(keys(out), d => match(d, /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/)));
+	const first = length(ds) - n;   // 22.03 的 ucode 没有 slice
+	for (let d in keys(out)) if (index(ds, d) < first) delete out[d];
+	return out;
+};

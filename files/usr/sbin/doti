@@ -12,7 +12,7 @@ import { make as opsMake } from 'doti.ops';
 import { doneOf, keyState, remember, snapshotOf, snapshotReport, urgent as remoteUrgent } from 'doti.remote';
 import { adminSsid, kidSsid, apply as wifiApply, bins as wifiBins, cmdsDisabled, cmdsKey, cmdsParent, ifacesOf, kidNet, load as wifiLoad, parentHasPassword, parentIfaces, parentTargets, randDigits, shq, state as wifiState, validPassword } from 'doti.wifi';
 import { follow as rootFollow, init as rootInit, kind as rootKind, release as rootRelease, temp as rootTemp } from 'doti.rootpw';
-import { add as usageAdd, devInfo, expired as usageExpired, onlineMin, pending as usagePending, toApi as usageApi, trendPush } from 'doti.usage';
+import { add as usageAdd, counts as usageCounts, countsKeep, devInfo, expired as usageExpired, onlineMin, pending as usagePending, toApi as usageApi, trendPush } from 'doti.usage';
 import { append as evAppend, step as evStep } from 'doti.events';
 import { bumpGen, ensureDirs, etc, gen, readJson, setApplied, takeMark, tmp, withLock, writeJson, writeSecret, writeText } from 'doti.store';
 import { hmacSha256, sha256 } from 'doti.hmac';
@@ -22,7 +22,7 @@ import { hexRand, lanAddr, logger, sh } from 'doti.sys';
 import { make as accountMake } from 'doti.account';
 import { collect as envCollect } from 'doti.env';
 
-const VERSION = '2.1.1';
+const VERSION = '2.1.2';
 const CLOCK_FIX = 120;
 const TREND_N = 60, TICK = 10, DT_MAX = 120, REAPPLY = 600, BASE_SAVE = 3600, WANT_ON = 3, WANT_OFF = 6, SEG_JITTER = 90, CONFIRM_TICKS = 3, LIMIT_KBPS = 100;   // LIMIT_KBPS：设置里没带限速时网速时的默认
 const cfg = {
@@ -37,6 +37,7 @@ const cfg = {
 	dnsPort: 5390,
 	board: getenv('DOTI_BOARD') || '/etc/board.json',
 	sysnet: getenv('DOTI_SYSNET') || '/sys/class/net',
+	sysphy: getenv('DOTI_SYSPHY') || '/sys/class/ieee80211',
 	updater: getenv('DOTI_UPDATER') || '/usr/sbin/doti-update',
 	updDir: getenv('DOTI_UPD_DIR') || '/etc/doti-updater',
 	updFix: getenv('DOTI_UPD_FIX') || '/usr/libexec/doti/updater-fix',
@@ -66,16 +67,25 @@ function newIdentity() {
 	log('生成设备身份，编号 ' + id.code);
 	return id;
 }
-// 出厂 MAC
-function factoryMac() {
-	let m = '';
-	try { m = json(fs.readfile(cfg.board) ?? '{}')?.system?.label_macaddr ?? ''; } catch (e) { m = ''; }
-	if (!m) m = trim(fs.readfile(cfg.sysnet + '/eth0/address') ?? '');
-	m = lc(m);
+// 出厂 MAC（硬件指纹，重刷不变）：按顺序取第一个像样的——标签 MAC、eth0、开机时从出厂分区读出写进 board.json 的 LAN / WAN 口 MAC、第一块无线芯片的 MAC。
+// 随机生成的（本地管理位为 1）、全 0 的不算：很多新机型 eth0 是随机的，真实 MAC 由系统脚本从出厂分区读出再设置
+function goodMac(m) {
+	m = lc(trim(m ?? ''));
 	if (!match(m, /^[0-9a-f]{2}(:[0-9a-f]{2}){5}$/) || m == '00:00:00:00:00:00') return null;
-	if (index('2367abef', substr(m, 1, 1)) >= 0) return null;
-	return m;
+	return index('2367abef', substr(m, 1, 1)) >= 0 ? null : m;
 }
+function factoryMac() {
+	let b = null;
+	try { b = json(fs.readfile(cfg.board) ?? '{}'); } catch (e) { b = null; }
+	for (let m in [b?.system?.label_macaddr, fs.readfile(cfg.sysnet + '/eth0/address'), b?.network?.lan?.macaddr, b?.network?.wan?.macaddr, fs.readfile(cfg.sysphy + '/phy0/macaddress')]) {
+		const g = goodMac(m);
+		if (g) return g;
+	}
+	return null;
+}
+// 运行中不会变：取一次
+let hwMemo = null;
+function hwHash() { if (hwMemo == null) { const m = factoryMac(); hwMemo = m ? sha256('doti-mac|' + m) : ''; } return hwMemo; }
 // 身份文件坏了（读出来不是完整身份）：留一份 identity.json.bad 方便排查，再生成新身份
 function identity() {
 	const id = readJson(etc('identity.json'), null);
@@ -170,7 +180,13 @@ function segFor(o, t, inUse) {
 	return s;
 }
 
-function usageSave() { if (usage && usageDay) writeJson(etc('usage/' + usageDay + '.json'), usage); }
+// 存当天的上网记录（每小时、换天时）；顺手把当天的计数记进 autocount.json（最近 3 天），报到时带上——没绑定、服务期外不交上网记录的路由器也能看出用得多不多
+function usageSave() {
+	if (!usage || !usageDay) return;
+	writeJson(etc('usage/' + usageDay + '.json'), usage);
+	try { writeJson(etc('autocount.json'), countsKeep(readJson(etc('autocount.json'), {}), usageDay, usageCounts(usage), 3)); }
+	catch (e) { log('当天计数没记上：' + e); }
+}
 function usageRoll(day, hour) {
 	if (day != usageDay) {
 		usageSave();
@@ -506,20 +522,22 @@ function envSafe() {
 		return null;
 	}
 }
-// 登记：带系统信息（env，给兼容性统计）和升级程序版本（updater，空串 = 没装上）
-function register(id) {
-	const mac = factoryMac(), env = envSafe();
+// 登记：带系统信息（env，给兼容性统计）和升级程序版本（updater，空串 = 没装上）。
+// refresh：已登记的再登记一次补硬件指纹——这时云端说 ID 被占用也不换身份，只记日志
+function register(id, refresh) {
+	const hw = hwHash(), env = envSafe();
 	let uv = '';
 	try { uv = updaterVersion(); } catch (e) { uv = ''; }
 	const r = call(id, 'register', { id: id.id, key: id.key, code: id.code, model: trim(fs.readfile(cfg.sys + '/tmp/sysinfo/model') ?? ''),
-		version: VERSION, ...(mac ? { macHash: sha256('doti-mac|' + mac) } : {}), updater: uv, ...(env ? { env } : {}) });
+		version: VERSION, ...(hw ? { macHash: hw } : {}), updater: uv, ...(env ? { env } : {}) });
 	if (r?.ok) {
 		id.registered = true;
+		id.hw = hw;   // 登记时带的硬件指纹（空串 = 没取到）：以后取到了、或换了取法取到不一样的，再登记一次让云端补上
 		writeSecret(etc('identity.json'), id);
 		log('已在云端登记');
 		return true;
 	}
-	if (r?.error == 'EXISTS') {
+	if (r?.error == 'EXISTS' && !refresh) {
 		id.id = hexRand(16); id.key = hexRand(32);
 		writeSecret(etc('identity.json'), id);
 		log('设备 ID 已被占用，换一个重新登记');
@@ -718,11 +736,11 @@ function inboxStep(id) {
 }
 function checkin(id, c) {
 	const on = wifiState(wifiBins(), map(c.nets, n => n.key)) ?? {};
-	const env = envSafe();
+	const env = envSafe(), ac = readJson(etc('autocount.json'), null);
 	let uv = '';
 	try { uv = updaterVersion(); } catch (e) { uv = ''; }
 	const r = call(id, 'checkin', { version: VERSION, updater: uv, lastUpgrade: 0, claimed: length(c.parents?.parents ?? []) > 0,
-		kidNets: length(filter(keys(on), k => on[k])), memberUntil: c.member?.x ?? 0, haveCurrent: true, ...(env ? { env } : {}) });
+		kidNets: length(filter(keys(on), k => on[k])), memberUntil: c.member?.x ?? 0, haveCurrent: true, ...(env ? { env } : {}), ...(type(ac) == 'object' ? { auto: ac } : {}) });
 	if (!r?.ok) { log('代升级程序报到没成功：' + (r?.error ?? '连不上云端或回包不对') + '，稍后再试'); return false; }
 	const lt = localtime(now());
 	writeJson(etc('checkin.json'), { day: today(lt), at: now() });
@@ -914,6 +932,11 @@ function cloudStep(id, c) {
 		}
 		return;
 	}
+	// 已登记但云端可能没有硬件指纹（老版本没取到 / 没记过带了什么）：再登记一次（同一身份重复登记没关系，云端只补不改）
+	if (id.hw != hwHash() && retryDue(regRetry, m)) {
+		if (register(id, true)) retryOk(regRetry);
+		else retryFail(regRetry, m, 60, 3600);
+	}
 	inboxStep(id);
 	if (!updaterOk(m) && retryDue(ckRetry, m) && checkinDue(id, now())) {
 		if (checkin(id, c)) retryOk(ckRetry);
@@ -945,8 +968,8 @@ function run() {
 	if (!length(c.nets)) { log('没有孩子网络（/etc/doti/nets.json），退出'); return 1; }
 	writeAddr(c);
 	// 硬件指纹（出厂 MAC 的哈希，重刷不变）：发现接口带上，家长手机认出是不是以前那台（恢复用）
-	const mac = factoryMac();
-	if (mac) writeText(tmp('hw'), sha256('doti-mac|' + mac));
+	const hw = hwHash();
+	if (hw) writeText(tmp('hw'), hw);
 	baseApply(c);
 	st = readJson(tmp('state.json'), null) ?? readJson(etc('state.json'), {});
 	det = detCreate(readJson(etc('baseline.json'), null));

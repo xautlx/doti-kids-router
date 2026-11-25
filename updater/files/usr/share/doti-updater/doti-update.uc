@@ -3,7 +3,7 @@
 'use strict';
 import * as fs from 'fs';
 
-const VERSION = '2.0.1';
+const VERSION = '2.0.2';
 const PKG = 'doti-kids-router', UPKG = 'doti-kids-router-updater';
 const cfg = {
 	dir: getenv('DOTI_UPD_DIR') || '/etc/doti-updater',
@@ -470,10 +470,12 @@ function checkin() {
 	lastErr = null;
 	if (!id.registered) return null;
 	const last = readJson(F('last.json'), null), m = readJson(cfg.etc + '/member.json', null), env = envSafe();
-	let pb = null;
+	let pb = null, ac = null;
 	try { pb = prebind(); } catch (e) { pb = null; }
+	// 最近几天路由器自动执行的计数（主程序记的 autocount.json）：没绑定、服务期外的也能看出用得多不多；读不到、不像样就不带
+	try { ac = readJson(cfg.etc + '/autocount.json', null); if (type(ac) != 'object') ac = null; } catch (e) { ac = null; }
 	const r = post('checkin', { version: installed(), updater: VERSION, lastUpgrade: last && !last.sent ? { 'from': last.prev, to: last.to, result: last.result, reason: last.reason, at: last.at } : null,
-		claimed: claimed(), kidNets: kidNets(), memberUntil: m?.x ?? 0, haveCurrent: haveCurrent(), ...(env ? { env } : {}), ...(pb ? { prebind: pb } : {}) });
+		claimed: claimed(), kidNets: kidNets(), memberUntil: m?.x ?? 0, haveCurrent: haveCurrent(), ...(env ? { env } : {}), ...(pb ? { prebind: pb } : {}), ...(ac ? { auto: ac } : {}) });
 	lastErr = r?.error ?? null;
 	if (r?.error == 'CLOCK') { clockFix(r.now); return null; }
 	if (r?.error == 'NOT_REGISTERED') { fs.mkdir(cfg.run, 0700); fs.writefile(cfg.run + '/unregistered.now', '' + now()); log('云端没有这台的记录，通知主程序重新登记'); return null; }
