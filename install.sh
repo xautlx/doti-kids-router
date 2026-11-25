@@ -140,20 +140,24 @@ inst() {
 		say "系统缺少依赖，联网安装（先用国内镜像）……"
 		for m in $MIRRORS_CN; do
 			mkopkg "$m"
-			if lim 90 mo update >/dev/null 2>&1 && mo install "$1"; then VIA=mirror; MIRROR=$m; return 0; fi
+			if lim 180 mo update >/dev/null 2>&1 && mo install "$1"; then VIA=mirror; MIRROR=$m; return 0; fi
 		done
 		say "国内镜像不通，改用系统的软件源……"
-		lim 180 opkg update >/dev/null 2>&1 || return 2
+		lim 300 opkg update >/dev/null 2>&1 || return 2
 		opkg install "$1"; return
 	fi
 	if apk add --allow-untrusted --no-network "$1" > "$TMP/log" 2>&1; then grep -v "^WARNING: opening from cache" "$TMP/log"; return 0; fi
 	say "系统缺少依赖，联网安装（先用国内镜像）……"
+	# 只给取索引限时（中断不伤系统）；真正安装不中途杀掉：慢机器（如 MT7620 上的 25.x）装包、跑安装后脚本要好几分钟，杀掉会留下装了一半的包
 	for m in $MIRRORS_CN; do
 		cat /etc/apk/repositories.d/*.list 2>/dev/null | sed "s#https*://downloads.openwrt.org#$m#" > "$TMP/repos"
-		if [ -s "$TMP/repos" ] && lim 120 apk add --allow-untrusted --repositories-file "$TMP/repos" "$1"; then VIA=mirror; MIRROR=$m; return 0; fi
+		[ -s "$TMP/repos" ] || continue
+		lim 300 apk update --allow-untrusted --repositories-file "$TMP/repos" >/dev/null 2>&1 || continue
+		if apk add --allow-untrusted --repositories-file "$TMP/repos" "$1"; then VIA=mirror; MIRROR=$m; return 0; fi
 	done
 	say "国内镜像不通，改用系统的软件源……"
-	lim 240 apk add --allow-untrusted "$1"
+	lim 300 apk update >/dev/null 2>&1 || return 2
+	apk add --allow-untrusted "$1"
 }
 # 1.2.0 以前的包叫 doti、doti-updater：先卸掉旧包再装（设置、绑定在 /etc/doti，不在包里，卸载不删）
 prev=$(cat "$SHARE/version" 2>/dev/null)   # 原来装着的版本（新装为空；旧包名的也有这个文件）
