@@ -7,7 +7,7 @@ import { TABLES as NFT, apply as nftApply, baseRuleset, dnsRuleset, freeIpList, 
 import { features, parseConntrack, parseLeases, parseSets, parseStations, prefixes } from 'doti.calib';
 import { create as detCreate, save as detSave, step as detStep } from 'doti.detect';
 import { DOH_IPS, counts as blockCounts, mainConf as blockMain, pickDir as blockDir } from 'doti.block';
-import { cleanDomain, cleanText, defaults as settingsDefaults, merge as settingsMerge, LAN_FREE_DEFAULT, ALLOW_DOH_DEFAULT, NAME_MAX, NET_KEYS } from 'doti.settings';
+import { cleanDomain, cleanText, defaultRouterName, defaults as settingsDefaults, merge as settingsMerge, LAN_FREE_DEFAULT, ALLOW_DOH_DEFAULT, NAME_MAX, NET_KEYS } from 'doti.settings';
 import { make as opsMake } from 'doti.ops';
 import { doneOf, keyState, remember, snapshotOf, snapshotReport, urgent as remoteUrgent } from 'doti.remote';
 import { adminSsid, kidSsid, apply as wifiApply, bins as wifiBins, cmdsDisabled, cmdsKey, cmdsParent, ifacesOf, kidNet, load as wifiLoad, parentHasPassword, parentIfaces, parentTargets, randDigits, shq, state as wifiState, validPassword } from 'doti.wifi';
@@ -22,7 +22,7 @@ import { hexRand, lanAddr, logger, sh } from 'doti.sys';
 import { make as accountMake } from 'doti.account';
 import { collect as envCollect } from 'doti.env';
 
-const VERSION = '2.1.2';
+const VERSION = '2.1.3';
 const CLOCK_FIX = 120;
 const TREND_N = 60, TICK = 10, DT_MAX = 120, REAPPLY = 600, BASE_SAVE = 3600, WANT_ON = 3, WANT_OFF = 6, SEG_JITTER = 90, CONFIRM_TICKS = 3, LIMIT_KBPS = 100;   // LIMIT_KBPS：设置里没带限速时网速时的默认
 const cfg = {
@@ -522,15 +522,39 @@ function envSafe() {
 		return null;
 	}
 }
+// 换编号（只在登记时、还没绑定时）：家长 WiFi、孩子 WiFi 改成新编号的名字（密码、开关不动），默认路由器名跟着换
+function recode(id, code) {
+	const old = id.code;
+	const r = withLock(() => {
+		const b = wifiBins(), o = wifiLoad(b), cmds = [];
+		for (let n in nets())
+			for (let f in ifacesOf(o, kidNet(n.key))) if (f.ssid == kidSsid(old, n.key)) push(cmds, 'set wireless.' + f.sec + '.ssid=' + shq(kidSsid(code, n.key)));
+		for (let f in filter(parentIfaces(o, old), x => x.ours)) push(cmds, 'set wireless.' + f.sec + '.ssid=' + shq(adminSsid(code)));
+		for (let x in cmds) system(b.uci + ' ' + x);
+		if (length(cmds)) { system(b.uci + ' commit wireless'); system('(sleep 2; ' + b.wifi + ' reload) >/dev/null 2>&1 &'); }
+		const st = readJson(etc('settings.json'), null);
+		if (st && st.routerName == defaultRouterName(old)) { st.routerName = defaultRouterName(code); writeJson(etc('settings.json'), st); }
+		id.code = code;
+		writeSecret(etc('identity.json'), id);
+		return true;
+	});
+	if (r[1]) { log('换编号：拿不到锁，先用原编号'); return; }
+	bumpGen();
+	log('编号 ' + old + ' 已被别的路由器用了，换成 ' + code + '（WiFi 名跟着改）');
+}
+
 // 登记：带系统信息（env，给兼容性统计）和升级程序版本（updater，空串 = 没装上）。
 // refresh：已登记的再登记一次补硬件指纹——这时云端说 ID 被占用也不换身份，只记日志
 function register(id, refresh) {
 	const hw = hwHash(), env = envSafe();
 	let uv = '';
 	try { uv = updaterVersion(); } catch (e) { uv = ''; }
-	const r = call(id, 'register', { id: id.id, key: id.key, code: id.code, model: trim(fs.readfile(cfg.sys + '/tmp/sysinfo/model') ?? ''),
+	const r = call(id, 'register', { id: id.id, key: id.key, code: id.code, recode: true, model: trim(fs.readfile(cfg.sys + '/tmp/sysinfo/model') ?? ''),
 		version: VERSION, ...(hw ? { macHash: hw } : {}), updater: uv, ...(env ? { env } : {}) });
 	if (r?.ok) {
+		// 编号被别的路由器用了：云端回一个没人用的，还没绑定就改用它（WiFi 名跟着改）；绑定后不改，家长已经认这个名字了
+		if (!refresh && type(r.code) == 'string' && match(r.code, /^[0-9A-F]{4}$/) && r.code != id.code && !length(readJson(etc('parents.json'), null)?.parents ?? []))
+			recode(id, r.code);
 		id.registered = true;
 		id.hw = hw;   // 登记时带的硬件指纹（空串 = 没取到）：以后取到了、或换了取法取到不一样的，再登记一次让云端补上
 		writeSecret(etc('identity.json'), id);

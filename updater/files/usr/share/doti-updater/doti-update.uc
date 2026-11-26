@@ -3,7 +3,7 @@
 'use strict';
 import * as fs from 'fs';
 
-const VERSION = '2.0.2';
+const VERSION = '2.0.3';
 const PKG = 'doti-kids-router', UPKG = 'doti-kids-router-updater';
 const cfg = {
 	dir: getenv('DOTI_UPD_DIR') || '/etc/doti-updater',
@@ -388,8 +388,17 @@ function selfUpdate(u) {
 	if (!download(o, f)) { log('取升级程序新副本失败'); return false; }
 	if (system(sprintf('%s -S %s selftest >/dev/null 2>&1', cfg.ucode, shq(f))) != 0) { fs.unlink(f); log('升级程序新副本自检不过，不用'); return false; }
 	fs.writefile(F('active.tmp'), other); fs.rename(F('active.tmp'), F('active'));
+	// 换副本的结果下次报到时报（新副本起来了就是成功；起不来被启动器换回旧副本，旧副本报失败）
+	writeJson(F('selfup.json'), { 'from': VERSION, to: o.version, at: now(), sent: false });
 	log(sprintf('升级程序 %s → %s，重启生效', VERSION, o.version));
 	return true;
+}
+// 上次换副本的结果（还没报过的）：现在跑的就是新版本算成功，否则是新副本起不来、换回来了
+function selfResult() {
+	const x = readJson(F('selfup.json'), null);
+	if (type(x) != 'object' || x.sent || !x.to) return null;
+	const ok = x.to == VERSION;
+	return { 'from': x.from, to: x.to, result: ok ? 'ok' : 'fail', reason: ok ? '' : '新副本起不来，换回 ' + VERSION, at: x.at };
 }
 
 // ---------- 每日报到 ----------
@@ -474,15 +483,19 @@ function checkin() {
 	try { pb = prebind(); } catch (e) { pb = null; }
 	// 最近几天路由器自动执行的计数（主程序记的 autocount.json）：没绑定、服务期外的也能看出用得多不多；读不到、不像样就不带
 	try { ac = readJson(cfg.etc + '/autocount.json', null); if (type(ac) != 'object') ac = null; } catch (e) { ac = null; }
+	const su = selfResult();
 	const r = post('checkin', { version: installed(), updater: VERSION, lastUpgrade: last && !last.sent ? { 'from': last.prev, to: last.to, result: last.result, reason: last.reason, at: last.at } : null,
+		...(su ? { lastUpgradeSelf: su } : {}),
 		claimed: claimed(), kidNets: kidNets(), memberUntil: m?.x ?? 0, haveCurrent: haveCurrent(), ...(env ? { env } : {}), ...(pb ? { prebind: pb } : {}), ...(ac ? { auto: ac } : {}) });
 	lastErr = r?.error ?? null;
+	if (r?.error == 'LIMIT') log('报到太勤：离上次报到不到 60 秒，云端这次不收，过一分钟再报');
 	if (r?.error == 'CLOCK') { clockFix(r.now); return null; }
 	if (r?.error == 'NOT_REGISTERED') { fs.mkdir(cfg.run, 0700); fs.writefile(cfg.run + '/unregistered.now', '' + now()); log('云端没有这台的记录，通知主程序重新登记'); return null; }
 	if (!r?.ok) return null;
 	clockFix(r.now);
 	writeJson(F('checkin.json'), { at: now(), day: today(now()), ok: true });
 	if (last && !last.sent) { last.sent = true; writeJson(F('last.json'), last); }
+	if (su) { const x = readJson(F('selfup.json'), {}); x.sent = true; writeJson(F('selfup.json'), x); }
 	inbox(r);
 	log('每日报到成功');
 	return r;
@@ -608,8 +621,16 @@ function daemon() {
 			if (r) {
 				fails = 0; retryAt = 0; catchUp = 0; okDay = today(t);
 				ramp.last = age; ramp.jit = 0.9 + rnd() * 0.2;
+				// 马上检查升级时升级程序和主程序都有新版：先换升级程序副本、退出由 procd 拉起，这次「马上」先不记成处理过，
+				// 新副本起来后照「马上」再报到一次（撞 60 秒限制就 65 秒后再报），再装主程序。同一次「马上」只换一次副本：
+				// 新副本起不来、被换回旧副本时，旧副本不再换，直接装主程序（不然会反复下载、反复重启）
+				const tried = want && readJson(F('updnow-self.json'), null)?.v == flag;
+				const self = r.updater && !tried ? guard('升级程序自更新', () => selfUpdate(r.updater)) : false;
+				if (self) {
+					if (want) { writeJson(F('updnow-self.json'), { v: flag, at: t }); log('马上检查升级：先换升级程序新副本，重启后接着装主程序'); }
+					return 0;
+				}
 				if (want) { writeJson(F('updnow.json'), { v: flag, at: t }); log('马上检查升级：已报到' + (r.target || r.updater ? '，有新版本，马上装' : '，没有新版本')); }
-				if (r.updater && guard('升级程序自更新', () => selfUpdate(r.updater))) return 0;
 				if (want && fs.stat(F('pending.json'))) guard('安装', installPending);
 			}
 			// 报得太勤（刚报过不到 60 秒，比如马上检查升级时刚换了升级程序）：65 秒后再报，不算失败、不退避
