@@ -22,7 +22,7 @@ import { hexRand, lanAddr, logger, sh } from 'doti.sys';
 import { make as accountMake } from 'doti.account';
 import { collect as envCollect } from 'doti.env';
 
-const VERSION = '2.1.3';
+const VERSION = '2.1.4';
 const CLOCK_FIX = 120;
 const TREND_N = 60, TICK = 10, DT_MAX = 120, REAPPLY = 600, BASE_SAVE = 3600, WANT_ON = 3, WANT_OFF = 6, SEG_JITTER = 90, CONFIRM_TICKS = 3, LIMIT_KBPS = 100;   // LIMIT_KBPS：设置里没带限速时网速时的默认
 const cfg = {
@@ -607,6 +607,15 @@ function bound() { return length(readJson(etc('parents.json'), null)?.parents ??
 // 认领限时：开机（或解除绑定）后不用密码的家长 WiFi 开 30 分钟
 const CLAIM_OPEN = 1800;
 function claimOpen(m) { return m < +(fs.readfile(tmp('claim-from')) ?? 0) + CLAIM_OPEN; }
+function claimLeft(m) { return max(0, +(fs.readfile(tmp('claim-from')) ?? 0) + CLAIM_OPEN - m); }
+// 没人绑定时，在 LuCI 里点「重新开放 30 分钟」：从现在起再开 30 分钟（常驻程序 10 秒内打开家长 WiFi）
+function reopen() {
+	if (bound()) { print(sprintf('%J\n', { ok: false, error: 'BOUND' })); return 1; }
+	ensureDirs();
+	writeText(tmp('claim-from'), '' + mono());
+	log('在路由器后台重新开放家长 WiFi 30 分钟');
+	print(sprintf('%J\n', { ok: true, left: CLAIM_OPEN })); return 0;
+}
 
 // root 密码按现在的状态对齐（每 10 秒看一次，断电、重启后也一样）：
 // 自己装的没人绑定：家长 WiFi 开放中 root 没设密码 → 临时默认密码；关闭后还是那个 → 恢复为空（rootpw.uc temp）；
@@ -669,11 +678,11 @@ function claimStep(id) {
 	if (open && off) {
 		wifiApply(b, cmdsDisabled(temp, true));
 		fs.unlink(etc('temp-off'));
-		log('开机 30 分钟内，临时家长 WiFi 重新打开等认领');
+		log('开放 30 分钟内，临时家长 WiFi 重新打开等认领');
 	}
 	else if (!open && !off && wifiApply(b, cmdsDisabled(temp, false))) {
 		writeText(etc('temp-off'), '' + now());
-		log('30 分钟没人认领，临时家长 WiFi 已关闭（断电重开路由器再开 30 分钟）');
+		log('30 分钟没人认领，临时家长 WiFi 已关闭（断电重开路由器，或在路由器后台「服务 → 一点守护」点重新开放，再开 30 分钟）');
 	}
 }
 
@@ -972,13 +981,21 @@ function cloudStep(id, c) {
 	if (bk.ver > bk.sentVer && now() >= bk.dueAt && retryDue(bk, m)) backupUpload(id, c);
 }
 
-// 基本状态（路由器管理页 LuCI 只读显示用）：不含设备 ID、密钥、密码（rootTemp 是公开的临时默认密码，正在用时才带）
+// LuCI 的 root 密码提示：自己装的、没绑定、root 是空的或正用着临时默认密码时带上这个公开的默认密码
+// （家长 WiFi 关着时也带，让人知道点「重新开放」后 root 会临时换成它）；预装的、绑定了、自己改过 root 的都为空
+function rootTempNote() {
+	if (bound() || preinstallPw()) return '';
+	const k = rootKind(sha256);
+	return (k == 'temp' || k == 'empty') ? ROOT_TEMP_PW : '';
+}
+
+// 基本状态（路由器管理页 LuCI 只读显示用）：不含设备 ID、密钥、密码（rootTemp 是公开的临时默认密码）
 function info() {
 	const id = readJson(etc('identity.json'), null) ?? {}, st = fs.stat(tmp('status.json'));
 	const u = updRecords(), ck = u.ck, up = u.up;
 	return { version: VERSION, released: trim(fs.readfile('/usr/share/doti/released') ?? ''), updater: updaterVersion(), running: exists(tmp('running')) && !!st && now() - st.mtime < 90,
 		code: id.code ?? '', registered: !!id.registered, parents: length(readJson(etc('parents.json'), null)?.parents ?? []), kidNets: length(nets()),
-		parentWifi: adminSsid(id.code), lastCheckin: ck?.at ?? 0, rootTemp: rootKind(sha256) == 'temp' ? ROOT_TEMP_PW : '',
+		parentWifi: adminSsid(id.code), claimLeft: bound() ? 0 : claimLeft(mono()), lastCheckin: ck?.at ?? 0, rootTemp: rootTempNote(),
 		...(up ? { lastUpgrade: { from: up.prev, to: up.to, result: up.result, reason: up.reason ?? '', at: up.at } } : {}) };
 }
 
@@ -1089,4 +1106,5 @@ else if (cmd == 'stop') exit(stop());
 else if (cmd == 'bell') exit(bell());
 else if (cmd == 'unbind') exit(unbind(ARGV[1] == '--remote'));
 else if (cmd == 'bye') exit(bye());
-else { warn('用法：doti run | init | id | status | stop | bell | unbind | bye\n'); exit(2); }
+else if (cmd == 'reopen') exit(reopen());
+else { warn('用法：doti run | init | id | info | status | stop | bell | unbind | bye | reopen\n'); exit(2); }

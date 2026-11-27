@@ -9,3 +9,6 @@ The names "一点守护" and "Doti" and the logos (assets/logo-lockup*.svg) are 
 
 始终屏蔽名单 blocklist/always.txt 的成人、赌博类域名取自 StevenBlack/hosts（MIT License）；游戏、短视频和直播、影视等可选分类名单由一点守护从互联网公开信息收集整理。
 Adult and gambling domains in blocklist/always.txt come from StevenBlack/hosts (MIT License); the optional lists (games, short video & live streaming, films & series) were collected by Doti from public information on the internet.
+
+路由器后台状态页画二维码用的 files/www/luci-static/resources/doti/qrcode.js 是 Kazuhiko Arase 的 QR Code Generator for JavaScript（MIT License，版权声明在文件头）。
+files/www/luci-static/resources/doti/qrcode.js is QR Code Generator for JavaScript by Kazuhiko Arase (MIT License; notice kept in the file header).

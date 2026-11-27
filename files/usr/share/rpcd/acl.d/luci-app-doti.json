@@ -1,10 +1,24 @@
 {
 	"luci-app-doti": {
-		"description": "一点守护：只读状态",
+		"description": "一点守护：状态；没人绑定时重新开放家长 WiFi",
 		"read": {
-			"cgi-io": [ "exec" ],
+			"cgi-io": [
+				"exec"
+			],
 			"file": {
-				"/usr/sbin/doti info": [ "exec" ]
+				"/usr/sbin/doti info": [
+					"exec"
+				]
+			}
+		},
+		"write": {
+			"cgi-io": [
+				"exec"
+			],
+			"file": {
+				"/usr/sbin/doti reopen": [
+					"exec"
+				]
 			}
 		}
 	}

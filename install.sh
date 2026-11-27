@@ -38,7 +38,8 @@ done_msg() {   # done_msg 原来的版本（新装为空） 这次的版本
 	[ -n "$bound" ] && return 0
 	code=$(sed -n 's/.*"code": *"\([0-9A-Z]*\)".*/\1/p' "$ETCD/identity.json" 2>/dev/null)
 	say "1–2 分钟后会出现不用密码的 WiFi「DOTI-${code:-XXXX}-ADMIN」，手机连上它，打开微信小程序「一点守护」按提示绑定。"
-	say "这个 WiFi 只开 30 分钟，超时后断电重开路由器会再开 30 分钟。"
+	say "最省事：电脑浏览器打开路由器后台「服务 → 一点守护」，手机连上家长 WiFi、微信扫码绑定。"
+	say "这个 WiFi 只开 30 分钟，超时后在后台这一页点「重新开放 30 分钟」，或断电重开路由器。"
 	# 自己装的、root 没设密码（或已经被主程序设成临时默认密码）：交代家长 WiFi 开放期间的临时 root 密码
 	pre=$(cat "$ETCD/preinstall" 2>/dev/null)
 	if [ ${#pre} -lt 8 ]; then
